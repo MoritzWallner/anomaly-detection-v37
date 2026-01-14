@@ -77,18 +77,24 @@ def print_summary(results: dict, dataset_name: str):
 def analyze_traffic():
     """Run anomaly detection on traffic data."""
     print()
-    print("[1/3] Loading and transforming traffic data...")
+    print("[1/4] Loading and transforming traffic data...")
     request_data = transform_traffic()
     print(f"      Loaded {len(request_data['groups'])} junctions")
 
-    print()
-    print("[2/3] Running anomaly detection...")
-    results = detect_anomalies(request_data)
+    # Set up diagram save path
+    diagram_path = Path(__file__).parent / "diagrams" / "traffic" / "anomaly_analysis.png"
 
     print()
-    print("[3/3] Saving results...")
+    print("[2/4] Running anomaly detection...")
+    results = detect_anomalies(request_data, save_plots_path=str(diagram_path))
+
+    print()
+    print("[3/4] Saving results...")
     output_path = save_results(results, "traffic_results.json")
     print(f"      Saved to: {output_path}")
+
+    print()
+    print(f"[4/4] Diagram saved to: {diagram_path}")
 
     print_summary(results, "Traffic")
 
@@ -98,18 +104,24 @@ def analyze_traffic():
 def analyze_vehicles():
     """Run anomaly detection on vehicle data."""
     print()
-    print("[1/3] Loading and transforming vehicle data...")
+    print("[1/4] Loading and transforming vehicle data...")
     request_data = transform_vehicles()
     print(f"      Loaded {len(request_data['groups'])} vehicles")
 
-    print()
-    print("[2/3] Running anomaly detection...")
-    results = detect_anomalies(request_data)
+    # Set up diagram save path
+    diagram_path = Path(__file__).parent / "diagrams" / "vehicles" / "anomaly_analysis.png"
 
     print()
-    print("[3/3] Saving results...")
+    print("[2/4] Running anomaly detection...")
+    results = detect_anomalies(request_data, save_plots_path=str(diagram_path))
+
+    print()
+    print("[3/4] Saving results...")
     output_path = save_results(results, "vehicles_results.json")
     print(f"      Saved to: {output_path}")
+
+    print()
+    print(f"[4/4] Diagram saved to: {diagram_path}")
 
     print_summary(results, "Vehicles")
 

@@ -10,7 +10,14 @@ from typing import List, Dict, Any
 import warnings
 import os
 import sys
+from pathlib import Path
 warnings.filterwarnings('ignore')
+
+# Use non-interactive backend for saving plots without display
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import seaborn as sns
 
 # Enable output by default for local use (set SUPPRESS_OUTPUT=true to disable)
 SUPPRESS_OUTPUT = os.environ.get('SUPPRESS_OUTPUT', 'false') == 'true'
@@ -76,7 +83,7 @@ def preprocess_enum_values(parameter_anomaly_group_array: List[Dict]) -> None:
                             # Keep type as 'enum' for output, but value is now int
 
 
-def detect_anomalies(request_data: Dict[str, Any]) -> Dict[str, Any]:
+def detect_anomalies(request_data: Dict[str, Any], save_plots_path: str = None) -> Dict[str, Any]:
     """
     Detects outlier groups by analyzing features. Supports both time-series and cross-sectional data.
 
@@ -84,6 +91,7 @@ def detect_anomalies(request_data: Dict[str, Any]) -> Dict[str, Any]:
         request_data: Dict with:
             - dataType: "time-series" | "cross-sectional" (default: "time-series")
             - groups: List of groups with features
+        save_plots_path: Optional path to save visualization PNG (e.g., "diagrams/vehicles/anomaly_analysis.png")
 
     For time-series data:
         - Uses monthly aggregation to derive shapValues (slope, max_drop, derivative)
@@ -171,6 +179,10 @@ def detect_anomalies(request_data: Dict[str, Any]) -> Dict[str, Any]:
 
     # Extract metadata
     metadata = extract_metadata(parameter_anomaly_group_array, data_type)
+
+    # Render and save plots if path provided
+    if save_plots_path:
+        render_plots(plot_data, metadata, parameter_anomaly_group_array, save_plots_path)
 
     # Return enhanced structure
     return {
@@ -1038,3 +1050,215 @@ def extract_metadata(parameter_anomaly_group_array: List[Dict], data_type: str =
         metadata['dateRange'] = None
 
     return metadata
+
+
+def render_plots(plots: Dict[str, Any], metadata: Dict[str, Any], groups: List[Dict], save_path: str):
+    """
+    Render matplotlib visualizations and save each as a separate image file.
+
+    Args:
+        plots: Plot data from generate_plot_data()
+        metadata: Metadata from extract_metadata()
+        groups: The analyzed groups with outlier flags
+        save_path: Base path for saving PNG files (directory will be used)
+    """
+    # Color constants
+    OUTLIER_COLOR = '#FF4444'
+    NORMAL_COLOR = '#4682B4'
+    PALETTE = ['#4682B4', '#FF8C00', '#32CD32', '#FF69B4', '#FFD700', '#9370DB', '#00CED1', '#FF6347']
+
+    # Create output directory
+    save_dir = Path(save_path).parent
+    save_dir.mkdir(parents=True, exist_ok=True)
+
+    saved_files = []
+
+    # 1. Time Series Plot
+    if plots.get('volume') and plots['volume'].get('series'):
+        fig, ax = plt.subplots(figsize=(12, 6))
+        for idx, series in enumerate(plots['volume']['series']):
+            group_id = series['groupId']
+            is_outlier = series['isOutlier']
+            points = series['points']
+
+            if points:
+                times = [pd.to_datetime(p['timestamp']) for p in points]
+                values = [p['value'] for p in points]
+
+                color = OUTLIER_COLOR if is_outlier else PALETTE[idx % len(PALETTE)]
+                linewidth = 2 if is_outlier else 1
+                alpha = 1.0 if is_outlier else 0.6
+                label = f"{group_id} {'(OUTLIER)' if is_outlier else ''}"
+
+                ax.plot(times, values, color=color, linewidth=linewidth, alpha=alpha, label=label)
+
+        ax.set_xlabel('Time', fontsize=12)
+        ax.set_ylabel('Value', fontsize=12)
+        ax.set_title('Time Series', fontsize=14, fontweight='bold')
+        ax.legend(loc='upper right', fontsize=9)
+        ax.grid(True, alpha=0.3)
+        ax.tick_params(axis='x', rotation=45)
+        plt.tight_layout()
+        filepath = save_dir / '01_time_series.png'
+        plt.savefig(filepath, dpi=150, bbox_inches='tight')
+        plt.close()
+        saved_files.append(filepath)
+
+    # 2. Box Plot
+    if plots.get('boxPlot') and plots['boxPlot'].get('boxes'):
+        fig, ax = plt.subplots(figsize=(10, 6))
+        boxes = plots['boxPlot']['boxes']
+        positions = list(range(len(boxes)))
+        labels = []
+
+        for idx, box in enumerate(boxes):
+            group_id = box['groupId']
+            labels.append(group_id)
+
+            for group in groups:
+                if group['parameterAnomalyGroupId'] == group_id:
+                    if group['featureArray']:
+                        values = [p['value'] for p in group['featureArray'][0].get('parameterHistoryArray', [])]
+                        if values:
+                            bp = ax.boxplot([values], positions=[idx], widths=0.6, patch_artist=True)
+                            color = OUTLIER_COLOR if group.get('isOutlier') else NORMAL_COLOR
+                            bp['boxes'][0].set_facecolor(color)
+                            bp['boxes'][0].set_alpha(0.6)
+                    break
+
+        ax.set_xticks(positions)
+        ax.set_xticklabels(labels, rotation=45)
+        ax.set_ylabel('Value', fontsize=12)
+        ax.set_title('Distribution by Group', fontsize=14, fontweight='bold')
+        ax.grid(True, alpha=0.3, axis='y')
+        plt.tight_layout()
+        filepath = save_dir / '02_box_plot.png'
+        plt.savefig(filepath, dpi=150, bbox_inches='tight')
+        plt.close()
+        saved_files.append(filepath)
+
+    # 3. Monthly STD Trends
+    if plots.get('std') and plots['std'].get('series'):
+        fig, ax = plt.subplots(figsize=(12, 6))
+        for series in plots['std']['series']:
+            group_id = series['groupId']
+            data_points = series['dataPoints']
+            color = series['color']
+            linewidth = series['lineWidth']
+
+            if data_points:
+                times = [pd.to_datetime(p[0], unit='ms') for p in data_points]
+                values = [p[1] for p in data_points]
+
+                ax.plot(times, values, label=group_id, color=color, linewidth=linewidth, marker='o', markersize=4)
+
+        ax.set_xlabel('Month', fontsize=12)
+        ax.set_ylabel('Standard Deviation', fontsize=12)
+        ax.set_title('Monthly Variability Trend', fontsize=14, fontweight='bold')
+        ax.legend(loc='upper right', fontsize=9)
+        ax.grid(True, alpha=0.3)
+        ax.tick_params(axis='x', rotation=45)
+        plt.tight_layout()
+        filepath = save_dir / '03_monthly_std.png'
+        plt.savefig(filepath, dpi=150, bbox_inches='tight')
+        plt.close()
+        saved_files.append(filepath)
+
+    # 4. Heatmap
+    if plots.get('heatmap') and plots['heatmap'].get('data'):
+        fig, ax = plt.subplots(figsize=(10, 8))
+        heatmap_data = np.array(plots['heatmap']['data'])
+        row_labels = plots['heatmap']['rowLabels']
+        col_labels = plots['heatmap']['columnLabels']
+
+        if len(row_labels) > 10:
+            hour_indices = [0, 6, 12, 18, 23] if len(row_labels) == 24 else list(range(0, len(row_labels), max(1, len(row_labels)//5)))
+            heatmap_subset = heatmap_data[hour_indices, :]
+            row_labels_subset = [row_labels[i] for i in hour_indices]
+        else:
+            heatmap_subset = heatmap_data
+            row_labels_subset = row_labels
+
+        im = ax.imshow(heatmap_subset, aspect='auto', cmap='YlOrRd')
+        ax.set_xticks(range(len(col_labels)))
+        ax.set_xticklabels(col_labels, rotation=45)
+        ax.set_yticks(range(len(row_labels_subset)))
+        ax.set_yticklabels([f'{h}:00' if h.isdigit() else h for h in row_labels_subset])
+        ax.set_xlabel('Group', fontsize=12)
+        ax.set_ylabel('Hour', fontsize=12)
+        ax.set_title('Hourly Patterns Heatmap', fontsize=14, fontweight='bold')
+        plt.colorbar(im, ax=ax)
+        plt.tight_layout()
+        filepath = save_dir / '04_heatmap.png'
+        plt.savefig(filepath, dpi=150, bbox_inches='tight')
+        plt.close()
+        saved_files.append(filepath)
+
+    # 5. Feature Importance
+    if plots.get('featureImportance') and plots['featureImportance'].get('features'):
+        fig, ax = plt.subplots(figsize=(10, 6))
+        features = plots['featureImportance']['features'][:10]  # Top 10
+        names = [f['featureName'] for f in features]
+        importances = [f['importance'] for f in features]
+        colors = [f['color'] for f in features]
+
+        ax.barh(range(len(names)), importances, color=colors, alpha=0.7)
+        ax.set_yticks(range(len(names)))
+        ax.set_yticklabels(names)
+        ax.set_xlabel('Importance', fontsize=12)
+        ax.set_title('Feature Importance', fontsize=14, fontweight='bold')
+        ax.grid(True, alpha=0.3, axis='x')
+        plt.tight_layout()
+        filepath = save_dir / '05_feature_importance.png'
+        plt.savefig(filepath, dpi=150, bbox_inches='tight')
+        plt.close()
+        saved_files.append(filepath)
+
+    # 6. Summary
+    fig, ax = plt.subplots(figsize=(8, 6))
+    ax.axis('off')
+
+    outlier_groups = [g for g in groups if g.get('isOutlier', False)]
+    normal_groups = [g for g in groups if not g.get('isOutlier', False)]
+
+    summary_text = f"""
+ANOMALY DETECTION SUMMARY
+
+Data Type: {metadata.get('dataType', 'N/A')}
+Total Groups: {metadata.get('totalGroups', len(groups))}
+Anomalous: {len(outlier_groups)} ({len(outlier_groups)/len(groups)*100:.1f}%)
+Normal: {len(normal_groups)}
+
+Features Analyzed:
+  {', '.join(metadata.get('featuresAnalyzed', [])[:5])}
+
+OUTLIERS DETECTED:
+"""
+
+    if outlier_groups:
+        for og in outlier_groups:
+            gid = og['parameterAnomalyGroupId']
+            outlier_features = [f['featureName'] for f in og.get('featureArray', []) if f.get('isOutlier', False)]
+            summary_text += f"\n  {gid}"
+            if outlier_features:
+                summary_text += f": {', '.join(outlier_features[:3])}"
+    else:
+        summary_text += "\n  None detected"
+
+    if metadata.get('dateRange'):
+        dr = metadata['dateRange']
+        summary_text += f"\n\nDate Range:\n  {dr['start'][:10]} to {dr['end'][:10]}"
+
+    ax.text(0.05, 0.95, summary_text, fontsize=12, family='monospace',
+             verticalalignment='top', horizontalalignment='left',
+             bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5),
+             transform=ax.transAxes)
+    plt.tight_layout()
+    filepath = save_dir / '06_summary.png'
+    plt.savefig(filepath, dpi=150, bbox_inches='tight')
+    plt.close()
+    saved_files.append(filepath)
+
+    _print(f"\n  Diagrams saved to: {save_dir}/")
+    for f in saved_files:
+        _print(f"    - {f.name}")
