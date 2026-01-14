@@ -379,10 +379,11 @@ def detect_group_outliers(feature_matrix: np.ndarray, group_ids: List[str],
     Detect which groups are outliers using multi-method approach.
 
     Methods:
-    1. Z-score analysis on features (slopes for time-series, raw values for cross-sectional)
-    2. Isolation Forest on full feature matrix
-    3. Score ranking
-    4. Feature importance calculation
+    1. Degradation score analysis (positive slopes = degradation)
+    2. Z-score analysis on features
+    3. Isolation Forest on full feature matrix
+    4. Combined scoring with degradation priority
+    5. Feature importance calculation
 
     Returns:
         Tuple of (outlier_flags_dict, feature_importance_dict)
@@ -390,19 +391,39 @@ def detect_group_outliers(feature_matrix: np.ndarray, group_ids: List[str],
 
     n_groups = len(feature_matrix)
 
-    # Method 1: Z-score analysis
+    # Method 1: Degradation Score Analysis (TIME-SERIES SPECIFIC)
+    # Positive slopes indicate increasing variability = degradation = BAD
     if data_type == 'time-series':
-        _print("\n  Method 1: Z-Score Analysis on Feature Slopes")
+        _print("\n  Method 1: Degradation Score Analysis (positive slopes = degradation)")
         # Extract slopes (every 3rd value starting from index 0)
         n_features = len(parameter_anomaly_group_array[0]['featureArray'])
         slope_indices = [i * 3 for i in range(n_features)]
-        analysis_values = feature_matrix[:, slope_indices]
+        slopes = feature_matrix[:, slope_indices]
+
+        # Degradation score: focus on POSITIVE slopes (increasing variability)
+        # Positive slope = degradation, negative slope = stable/improving
+        # We want to detect groups with the highest positive slopes
+        degradation_scores = np.mean(slopes, axis=1)  # Higher = more degradation
+
+        # Normalize degradation scores to [0, 1] range for comparison
+        if np.max(degradation_scores) != np.min(degradation_scores):
+            degradation_scores_normalized = (degradation_scores - np.min(degradation_scores)) / (np.max(degradation_scores) - np.min(degradation_scores))
+        else:
+            degradation_scores_normalized = np.zeros_like(degradation_scores)
+
+        for i, group_id in enumerate(group_ids):
+            _print(f"    {group_id}: degradation_score={degradation_scores[i]:.4f} (normalized={degradation_scores_normalized[i]:.3f})")
+
+        analysis_values = slopes
     else:
         _print("\n  Method 1: Z-Score Analysis on Raw Feature Values")
         # Use all features directly for cross-sectional
         analysis_values = feature_matrix
+        degradation_scores = np.zeros(n_groups)
+        degradation_scores_normalized = np.zeros(n_groups)
 
-    # Calculate Z-scores per feature
+    # Method 2: Z-score analysis (statistical deviation)
+    _print("\n  Method 2: Z-Score Analysis (statistical deviation)")
     value_zscores = np.zeros_like(analysis_values)
     for i in range(analysis_values.shape[1]):
         if np.std(analysis_values[:, i]) > 0:
@@ -416,8 +437,8 @@ def detect_group_outliers(feature_matrix: np.ndarray, group_ids: List[str],
     for i, group_id in enumerate(group_ids):
         _print(f"    {group_id}: anomaly_score={anomaly_scores[i]:.3f}")
 
-    # Method 2: Isolation Forest
-    _print("\n  Method 2: Isolation Forest on All Features")
+    # Method 3: Isolation Forest
+    _print("\n  Method 3: Isolation Forest on All Features")
 
     feature_importance_dict = {}
 
@@ -440,7 +461,7 @@ def detect_group_outliers(feature_matrix: np.ndarray, group_ids: List[str],
         _print(f"    Isolation Forest flagged: {if_outliers}")
 
         # Calculate feature importance from tree structures
-        _print("\n  Method 2b: Calculating Feature Importance...")
+        _print("\n  Method 3b: Calculating Feature Importance...")
 
         try:
             # Extract feature importance from Isolation Forest trees
@@ -474,23 +495,56 @@ def detect_group_outliers(feature_matrix: np.ndarray, group_ids: List[str],
         _print(f"    Skipping Isolation Forest (need ≥3 groups, have {n_groups})")
         iso_predictions = np.ones(n_groups)
 
-    # Method 3: Rank by anomaly score and flag top outlier
-    _print("\n  Method 3: Anomaly Score Ranking")
-    ranked_indices = np.argsort(anomaly_scores)[::-1]  # Highest first
+    # Method 4: Combined Scoring with Degradation Priority (for time-series)
+    if data_type == 'time-series':
+        _print("\n  Method 4: Combined Scoring (degradation-weighted)")
 
-    _print("    Ranking (most anomalous to least):")
+        # Combined score: prioritize degradation (positive slopes) over pure statistical deviation
+        # Formula: 70% degradation score + 30% anomaly score (normalized)
+        anomaly_scores_normalized = (anomaly_scores - np.min(anomaly_scores)) / (np.max(anomaly_scores) - np.min(anomaly_scores) + 1e-10)
+
+        combined_scores = 0.7 * degradation_scores_normalized + 0.3 * anomaly_scores_normalized
+
+        _print("    Combined scores (70% degradation + 30% anomaly):")
+        for i, group_id in enumerate(group_ids):
+            _print(f"      {group_id}: combined={combined_scores[i]:.3f} (degradation={degradation_scores_normalized[i]:.3f}, anomaly={anomaly_scores_normalized[i]:.3f})")
+
+        # Rank by combined score (highest = most degraded)
+        ranked_indices = np.argsort(combined_scores)[::-1]
+        ranking_scores = combined_scores
+    else:
+        _print("\n  Method 4: Anomaly Score Ranking")
+        ranked_indices = np.argsort(anomaly_scores)[::-1]  # Highest first
+        ranking_scores = anomaly_scores
+
+    _print("\n  Final Ranking (worst to best):")
     for rank, idx in enumerate(ranked_indices):
         group_id = group_ids[idx]
-        score = anomaly_scores[idx]
+        score = ranking_scores[idx]
         marker = "OUTLIER" if rank == 0 else ""
         _print(f"      {rank+1}. {group_id}: {score:.3f} {marker}")
 
-    # Determine outliers: Top anomaly score OR flagged by Isolation Forest
+    # Determine outliers: Top combined score OR flagged by Isolation Forest
+    # For time-series: also flag if degradation score is significantly positive
     outlier_flags = {}
     for i, group_id in enumerate(group_ids):
-        is_top_anomaly = (i == ranked_indices[0])
+        is_top_score = (i == ranked_indices[0])
         is_if_outlier = (iso_predictions[i] == -1)
-        outlier_flags[group_id] = is_top_anomaly or is_if_outlier
+
+        # Additional check: flag if degradation score is significantly above mean
+        if data_type == 'time-series':
+            is_high_degradation = degradation_scores[i] > (np.mean(degradation_scores) + np.std(degradation_scores))
+        else:
+            is_high_degradation = False
+
+        outlier_flags[group_id] = is_top_score or is_if_outlier or is_high_degradation
+
+    # Store scores in groups for visualization
+    for i, group in enumerate(parameter_anomaly_group_array):
+        group['zScore'] = float(anomaly_scores[i])
+        if data_type == 'time-series':
+            group['degradationScore'] = float(degradation_scores[i])
+            group['combinedScore'] = float(ranking_scores[i])
 
     # Update group-level isOutlier flags
     for group in parameter_anomaly_group_array:
