@@ -22,22 +22,47 @@ Output format:
 
 import pandas as pd
 import uuid
-from typing import Dict, Any
+import json
+from typing import Dict, Any, Optional
 from pathlib import Path
 
 
-def transform(csv_path: str = None) -> Dict[str, Any]:
+def load_config(config_path: str = None) -> Dict[str, Any]:
+    """
+    Load configuration file with min/max constraints.
+
+    Args:
+        config_path: Path to config JSON. If None, uses default location.
+
+    Returns:
+        Config dict with 'constraints' key mapping feature names to {min, max}
+    """
+    if config_path is None:
+        config_path = Path(__file__).parent.parent / "config" / "vehicles.json"
+
+    if Path(config_path).exists():
+        with open(config_path, 'r') as f:
+            return json.load(f)
+    return {"constraints": {}}
+
+
+def transform(csv_path: str = None, config_path: str = None) -> Dict[str, Any]:
     """
     Transform vehicles.csv to anomaly detector input format.
 
     Args:
         csv_path: Path to vehicles.csv. If None, uses default location.
+        config_path: Path to config JSON with min/max constraints. If None, uses default.
 
     Returns:
         Dict in the format expected by detect_anomalies()
     """
     if csv_path is None:
         csv_path = Path(__file__).parent.parent / "datasets" / "vehicles.csv"
+
+    # Load config with min/max constraints
+    config = load_config(config_path)
+    constraints = config.get("constraints", {})
 
     df = pd.read_csv(csv_path)
     df['time'] = pd.to_datetime(df['time'])
@@ -46,6 +71,7 @@ def transform(csv_path: str = None) -> Dict[str, Any]:
     feature_cols = [c for c in df.columns if c not in ['vehicle', 'time']]
 
     groups = []
+    filtered_counts = {}  # Track filtered values per feature
 
     for vehicle in sorted(df['vehicle'].unique()):
         vehicle_data = df[df['vehicle'] == vehicle].sort_values('time')
@@ -58,6 +84,14 @@ def transform(csv_path: str = None) -> Dict[str, Any]:
                 value = row[col]
                 # Skip NaN values
                 if pd.notna(value):
+                    # Apply min/max filtering if constraints exist for this feature
+                    if col in constraints:
+                        min_val = constraints[col].get('min', float('-inf'))
+                        max_val = constraints[col].get('max', float('inf'))
+                        if not (min_val <= value <= max_val):
+                            filtered_counts[col] = filtered_counts.get(col, 0) + 1
+                            continue  # Skip this value
+
                     param_history.append({
                         "parameterHistoryId": str(uuid.uuid4()),
                         "createdAt": row['time'].isoformat(),
@@ -74,6 +108,13 @@ def transform(csv_path: str = None) -> Dict[str, Any]:
             "parameterAnomalyGroupId": vehicle,
             "featureArray": feature_array
         })
+
+    # Log filtered values
+    if filtered_counts:
+        print("      Min/max filtering applied:")
+        for feature, count in filtered_counts.items():
+            constraint = constraints[feature]
+            print(f"        {feature}: {count} values filtered (valid range: {constraint['min']}-{constraint['max']})")
 
     return {
         "dataType": "time-series",

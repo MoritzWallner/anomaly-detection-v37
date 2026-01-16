@@ -1,0 +1,5 @@
+{
+  "dataset": "traffic",
+  "description": "Junction vehicle counts - min/max constraints",
+  "constraints": {}
+}
