@@ -3,8 +3,9 @@
 Anomaly Detection Analysis - Main Entry Point
 
 Interactive menu to choose which dataset to analyze:
-1. Traffic (Junction data)
-2. Vehicles (EV battery data)
+1. Traffic (Junction data) - Time-series
+2. Vehicles (EV battery data) - Time-series
+3. Customers (Profile data) - Cross-sectional
 """
 
 import sys
@@ -17,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).parent / "src"))
 from anomaly_detector import detect_anomalies
 from traffic_transform import transform as transform_traffic
 from vehicles_transform import transform as transform_vehicles
+from customers_transform import transform as transform_customers
 
 
 def print_header():
@@ -31,8 +33,9 @@ def print_menu():
     """Print dataset selection menu."""
     print("Select dataset to analyze:")
     print()
-    print("  1. Traffic (Junction vehicle counts)")
-    print("  2. Vehicles (EV battery data)")
+    print("  1. Traffic (Junction vehicle counts) - Time-series")
+    print("  2. Vehicles (EV battery data) - Time-series")
+    print("  3. Customers (Profile data) - Cross-sectional")
     print()
     print("  q. Quit")
     print()
@@ -128,6 +131,33 @@ def analyze_vehicles():
     return results
 
 
+def analyze_customers():
+    """Run anomaly detection on customer data (cross-sectional)."""
+    print()
+    print("[1/4] Loading and transforming customer data...")
+    request_data = transform_customers()
+    print(f"      Loaded {len(request_data['groups'])} customers (cross-sectional)")
+
+    # Set up diagram save path
+    diagram_path = Path(__file__).parent / "diagrams" / "customers" / "anomaly_analysis.png"
+
+    print()
+    print("[2/4] Running anomaly detection...")
+    results = detect_anomalies(request_data, save_plots_path=str(diagram_path))
+
+    print()
+    print("[3/4] Saving results...")
+    output_path = save_results(results, "customers_results.json")
+    print(f"      Saved to: {output_path}")
+
+    print()
+    print(f"[4/4] Diagram saved to: {diagram_path}")
+
+    print_summary(results, "Customers")
+
+    return results
+
+
 def main():
     """Main entry point."""
     print_header()
@@ -135,7 +165,7 @@ def main():
     while True:
         print_menu()
 
-        choice = input("Enter choice (1, 2, or q): ").strip().lower()
+        choice = input("Enter choice (1, 2, 3, or q): ").strip().lower()
 
         if choice == '1':
             analyze_traffic()
@@ -143,11 +173,14 @@ def main():
         elif choice == '2':
             analyze_vehicles()
             print()
+        elif choice == '3':
+            analyze_customers()
+            print()
         elif choice == 'q':
             print("Goodbye!")
             break
         else:
-            print("Invalid choice. Please enter 1, 2, or q.")
+            print("Invalid choice. Please enter 1, 2, 3, or q.")
             print()
 
 

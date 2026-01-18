@@ -507,56 +507,48 @@ def detect_group_outliers(feature_matrix: np.ndarray, group_ids: List[str],
         _print(f"    Skipping Isolation Forest (need ≥3 groups, have {n_groups})")
         iso_predictions = np.ones(n_groups)
 
-    # Method 4: Combined Scoring with Degradation Priority (for time-series)
-    if data_type == 'time-series':
-        _print("\n  Method 4: Combined Scoring (degradation-weighted)")
+    # Ranking by Anomaly Score (same as v2)
+    _print("\n  Anomaly Score Ranking:")
+    ranked_indices = np.argsort(anomaly_scores)[::-1]  # Highest anomaly score first
 
-        # Combined score: prioritize degradation (positive slopes) over pure statistical deviation
-        # Formula: 70% degradation score + 30% anomaly score (normalized)
-        anomaly_scores_normalized = (anomaly_scores - np.min(anomaly_scores)) / (np.max(anomaly_scores) - np.min(anomaly_scores) + 1e-10)
-
-        combined_scores = 0.7 * degradation_scores_normalized + 0.3 * anomaly_scores_normalized
-
-        _print("    Combined scores (70% degradation + 30% anomaly):")
-        for i, group_id in enumerate(group_ids):
-            _print(f"      {group_id}: combined={combined_scores[i]:.3f} (degradation={degradation_scores_normalized[i]:.3f}, anomaly={anomaly_scores_normalized[i]:.3f})")
-
-        # Rank by combined score (highest = most degraded)
-        ranked_indices = np.argsort(combined_scores)[::-1]
-        ranking_scores = combined_scores
-    else:
-        _print("\n  Method 4: Anomaly Score Ranking")
-        ranked_indices = np.argsort(anomaly_scores)[::-1]  # Highest first
-        ranking_scores = anomaly_scores
-
-    _print("\n  Final Ranking (worst to best):")
+    _print("  Final Ranking (worst to best):")
     for rank, idx in enumerate(ranked_indices):
         group_id = group_ids[idx]
-        score = ranking_scores[idx]
+        score = anomaly_scores[idx]
         marker = "OUTLIER" if rank == 0 else ""
         _print(f"      {rank+1}. {group_id}: {score:.3f} {marker}")
 
-    # Determine outliers: Top combined score OR flagged by Isolation Forest
-    # For time-series: also flag if degradation score is significantly positive
+    # Determine outliers: Top anomaly score OR flagged by Isolation Forest
+    # For time-series: additionally require POSITIVE degradation (increasing variability)
     outlier_flags = {}
-    for i, group_id in enumerate(group_ids):
-        is_top_score = (i == ranked_indices[0])
-        is_if_outlier = (iso_predictions[i] == -1)
 
-        # Additional check: flag if degradation score is significantly above mean
-        if data_type == 'time-series':
-            is_high_degradation = degradation_scores[i] > (np.mean(degradation_scores) + np.std(degradation_scores))
-        else:
-            is_high_degradation = False
+    if data_type == 'time-series':
+        # Find the top-ranked group with positive degradation
+        top_degrading_group = None
+        for idx in ranked_indices:
+            if degradation_scores[idx] > 0:
+                top_degrading_group = group_ids[idx]
+                break
 
-        outlier_flags[group_id] = is_top_score or is_if_outlier or is_high_degradation
+        for i, group_id in enumerate(group_ids):
+            is_if_outlier = (iso_predictions[i] == -1)
+            has_positive_degradation = degradation_scores[i] > 0
+
+            # Flag if: (top-ranked with positive degradation) OR (IF outlier with positive degradation)
+            is_top_degrading = (group_id == top_degrading_group)
+            outlier_flags[group_id] = has_positive_degradation and (is_top_degrading or is_if_outlier)
+    else:
+        # For cross-sectional data, use original v2 logic
+        for i, group_id in enumerate(group_ids):
+            is_top_anomaly = (i == ranked_indices[0])
+            is_if_outlier = (iso_predictions[i] == -1)
+            outlier_flags[group_id] = is_top_anomaly or is_if_outlier
 
     # Store scores in groups for visualization
     for i, group in enumerate(parameter_anomaly_group_array):
         group['zScore'] = float(anomaly_scores[i])
         if data_type == 'time-series':
             group['degradationScore'] = float(degradation_scores[i])
-            group['combinedScore'] = float(ranking_scores[i])
 
     # Update group-level isOutlier flags
     for group in parameter_anomaly_group_array:
