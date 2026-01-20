@@ -575,10 +575,9 @@ def detect_feature_and_point_outliers(parameter_anomaly_group_array: List[Dict],
                                       feature_importance_dict: Dict[str, float],
                                       data_type: str = 'time-series') -> None:
     """
-    Detect feature-level and point-level outliers within groups.
+    Detect feature-level outliers within groups.
 
     Feature-level: Use Isolation Forest feature importance to flag features
-    Point-level: Flag time points that deviate significantly from local trend (time-series only)
 
     Args:
         feature_importance_dict: Dict mapping feature names to importance scores
@@ -620,34 +619,9 @@ def detect_feature_and_point_outliers(parameter_anomaly_group_array: List[Dict],
             else:
                 feature['isOutlier'] = False
 
-            # Point-level detection (only for time-series data)
-            param_history = feature['parameterHistoryArray']
-            if data_type == 'time-series' and len(param_history) >= 3:
-                param_history_sorted = sorted(param_history, key=lambda x: x['createdAt'])
-                values = np.array([p['value'] for p in param_history_sorted])
-
-                # Fit trend line
-                try:
-                    trend = calculate_trend(values)
-                    residuals = values - trend
-
-                    # Calculate Z-scores of residuals
-                    if np.std(residuals) > 0:
-                        z_scores = stats.zscore(residuals)
-
-                        # Flag points with |Z-score| > 3
-                        for i, point in enumerate(param_history_sorted):
-                            point['isOutlier'] = abs(z_scores[i]) > 3.0
-                    else:
-                        for point in param_history:
-                            point['isOutlier'] = False
-                except:
-                    for point in param_history:
-                        point['isOutlier'] = False
-            else:
-                # Cross-sectional: no point-level detection (no time dimension)
-                for point in param_history:
-                    point['isOutlier'] = False
+            # No point-level detection - set all points to non-outlier
+            for point in feature['parameterHistoryArray']:
+                point['isOutlier'] = False
 
 
 def generate_plot_data(parameter_anomaly_group_array: List[Dict],
