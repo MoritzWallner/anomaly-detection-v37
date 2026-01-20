@@ -1192,6 +1192,97 @@ def render_plots(plots: Dict[str, Any], metadata: Dict[str, Any], groups: List[D
         plt.close()
         saved_files.append(filepath)
 
+    # 7. Slope Values per Group (Degradation Indicator)
+    if plots.get('shapValues') and plots['shapValues'].get('groups'):
+        fig, ax = plt.subplots(figsize=(10, 6))
+
+        groups_data = plots['shapValues']['groups']
+        group_ids = [g['groupId'] for g in groups_data]
+
+        # Calculate average slope per group (across all features)
+        avg_slopes = []
+        for g in groups_data:
+            slopes = [f['slope'] for f in g['features']]
+            avg_slopes.append(np.mean(slopes) if slopes else 0)
+
+        # Color bars: red for positive (degradation), blue for negative
+        colors = [OUTLIER_COLOR if s > 0 else NORMAL_COLOR for s in avg_slopes]
+
+        y_pos = range(len(group_ids))
+        ax.barh(y_pos, avg_slopes, color=colors, alpha=0.7)
+        ax.axvline(x=0, color='black', linestyle='-', linewidth=1)
+
+        ax.set_yticks(y_pos)
+        ax.set_yticklabels(group_ids)
+        ax.set_xlabel('Slope (positive = increasing variability)', fontsize=12)
+        ax.set_title('Degradation Score by Group', fontsize=14, fontweight='bold')
+        ax.grid(True, alpha=0.3, axis='x')
+        plt.tight_layout()
+        filepath = save_dir / '07_slope_by_group.png'
+        plt.savefig(filepath, dpi=150, bbox_inches='tight')
+        plt.close()
+        saved_files.append(filepath)
+
+    # 8. ShapValues per Feature per Group
+    if plots.get('shapValues') and plots['shapValues'].get('groups'):
+        groups_data = plots['shapValues']['groups']
+        n_groups = len(groups_data)
+
+        if n_groups > 0 and groups_data[0]['features']:
+            feature_names = [f['featureName'] for f in groups_data[0]['features']]
+            n_features = len(feature_names)
+
+            fig, axes = plt.subplots(1, n_features, figsize=(5 * n_features, 6))
+            if n_features == 1:
+                axes = [axes]
+
+            for feat_idx, feature_name in enumerate(feature_names):
+                ax = axes[feat_idx]
+
+                group_ids = []
+                slopes = []
+                max_drops = []
+                derivatives = []
+                is_outliers = []
+
+                for g in groups_data:
+                    group_ids.append(g['groupId'])
+                    is_outliers.append(g['isOutlier'])
+                    for f in g['features']:
+                        if f['featureName'] == feature_name:
+                            slopes.append(f['slope'])
+                            max_drops.append(f['maxDrop'])
+                            derivatives.append(f['derivative'])
+                            break
+
+                x = np.arange(len(group_ids))
+                width = 0.25
+
+                ax.bar(x - width, slopes, width, label='Slope', color='#4682B4')
+                ax.bar(x, max_drops, width, label='Max Drop', color='#FF8C00')
+                ax.bar(x + width, derivatives, width, label='Derivative', color='#32CD32')
+
+                # Highlight outlier groups
+                for i, is_outlier in enumerate(is_outliers):
+                    if is_outlier:
+                        ax.axvspan(i - 0.4, i + 0.4, alpha=0.2, color='red')
+
+                ax.set_xlabel('Group')
+                ax.set_ylabel('Value')
+                ax.set_title(f'{feature_name}')
+                ax.set_xticks(x)
+                ax.set_xticklabels(group_ids, rotation=45)
+                ax.legend(loc='best', fontsize=8)
+                ax.axhline(y=0, color='black', linestyle='-', linewidth=0.5)
+                ax.grid(True, alpha=0.3, axis='y')
+
+            plt.suptitle('ShapValues by Feature', fontsize=14, fontweight='bold')
+            plt.tight_layout()
+            filepath = save_dir / '08_shapvalues_by_feature.png'
+            plt.savefig(filepath, dpi=150, bbox_inches='tight')
+            plt.close()
+            saved_files.append(filepath)
+
     # 6. Summary
     fig, ax = plt.subplots(figsize=(8, 6))
     ax.axis('off')
