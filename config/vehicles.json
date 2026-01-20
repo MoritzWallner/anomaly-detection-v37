@@ -1,6 +1,5 @@
 {
   "dataset": "vehicles",
-  "description": "EV battery data - min/max constraints",
   "constraints": {
     "voltage": { "min": 320, "max": 460 }
   }

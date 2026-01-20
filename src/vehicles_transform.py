@@ -2,8 +2,8 @@
 Transform vehicles.csv into the format expected by detect_anomalies().
 
 Input format (vehicles.csv):
-    vehicle,time,voltage,soc
-    ID1,2022-10-01T00:00:00,380.5,85.2
+    vehicle,time,voltage,soc,usage
+    ID1,2022-10-01T00:00:00,380.5,85.2,driving
 
 Output format:
     {
@@ -18,12 +18,14 @@ Output format:
             }
         ]
     }
+
+Note: The 'usage' column is present in the CSV but excluded from analysis.
 """
 
 import pandas as pd
 import uuid
 import json
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 from pathlib import Path
 
 
@@ -67,8 +69,8 @@ def transform(csv_path: str = None, config_path: str = None) -> Dict[str, Any]:
     df = pd.read_csv(csv_path)
     df['time'] = pd.to_datetime(df['time'])
 
-    # Feature columns (exclude metadata columns)
-    feature_cols = [c for c in df.columns if c not in ['vehicle', 'time']]
+    # Feature columns (exclude metadata columns and usage)
+    feature_cols = [c for c in df.columns if c not in ['vehicle', 'time', 'usage']]
 
     groups = []
     filtered_counts = {}  # Track filtered values per feature
@@ -84,11 +86,13 @@ def transform(csv_path: str = None, config_path: str = None) -> Dict[str, Any]:
                 value = row[col]
                 # Skip NaN values
                 if pd.notna(value):
+                    value_out = float(value)
+
                     # Apply min/max filtering if constraints exist for this feature
                     if col in constraints:
                         min_val = constraints[col].get('min', float('-inf'))
                         max_val = constraints[col].get('max', float('inf'))
-                        if not (min_val <= value <= max_val):
+                        if not (min_val <= value_out <= max_val):
                             filtered_counts[col] = filtered_counts.get(col, 0) + 1
                             continue  # Skip this value
 
@@ -96,7 +100,7 @@ def transform(csv_path: str = None, config_path: str = None) -> Dict[str, Any]:
                         "parameterHistoryId": str(uuid.uuid4()),
                         "createdAt": row['time'].isoformat(),
                         "type": "number",
-                        "value": float(value)
+                        "value": value_out
                     })
 
             feature_array.append({
