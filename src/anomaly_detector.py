@@ -1,6 +1,5 @@
 import numpy as np
 import pandas as pd
-from sklearn.linear_model import LinearRegression
 from sklearn.ensemble import IsolationForest
 from sklearn.preprocessing import StandardScaler
 from sklearn.inspection import permutation_importance
@@ -26,6 +25,30 @@ def _print(*args, **kwargs):
     """Conditional print that respects SUPPRESS_OUTPUT flag."""
     if not SUPPRESS_OUTPUT:
         print(*args, **kwargs)
+
+
+def calculate_slope(y: np.ndarray) -> float:
+    """Calculate slope of linear regression for y against x=[0,1,2,...,n-1]."""
+    n = len(y)
+    if n < 2:
+        return 0.0
+    x = np.arange(n)
+    x_mean = (n - 1) / 2
+    y_mean = np.mean(y)
+    numerator = np.sum((x - x_mean) * (y - y_mean))
+    denominator = np.sum((x - x_mean) ** 2)
+    return numerator / denominator if denominator != 0 else 0.0
+
+
+def calculate_trend(y: np.ndarray) -> np.ndarray:
+    """Calculate linear trend line for y against x=[0,1,2,...,n-1]."""
+    n = len(y)
+    if n < 2:
+        return y.copy()
+    x = np.arange(n)
+    slope = calculate_slope(y)
+    intercept = np.mean(y) - slope * (n - 1) / 2
+    return slope * x + intercept
 
 
 def preprocess_enum_values(parameter_anomaly_group_array: List[Dict]) -> None:
@@ -305,18 +328,14 @@ def calculate_shap_values(parameter_anomaly_group_array: List[Dict]) -> None:
                 for p in param_history_sorted
             ])
 
-            # Group by month and calculate statistics (like find_bad_cell_car.py)
+            # Group by month and calculate statistics
             df['month'] = df['time'].dt.to_period('M')
             monthly_stats = df.groupby('month')['value'].agg(['mean', 'std', 'min', 'max', 'count']).reset_index()
 
             if len(monthly_stats) < 2:
                 # Not enough months for trend analysis, use raw data
                 values = np.array([p['value'] for p in param_history_sorted])
-                X = np.arange(len(values)).reshape(-1, 1)
-                try:
-                    slope = LinearRegression().fit(X, values).coef_[0]
-                except:
-                    slope = 0.0
+                slope = calculate_slope(values)
 
                 diffs = np.diff(values) if len(values) > 1 else np.array([0])
                 max_drop = np.min(diffs) if len(diffs) > 0 else 0.0
@@ -328,13 +347,7 @@ def calculate_shap_values(parameter_anomaly_group_array: List[Dict]) -> None:
 
             # Calculate slope on monthly STD (key indicator of degradation - increasing variability)
             monthly_std = monthly_stats['std'].fillna(0).values
-            X = np.arange(len(monthly_std)).reshape(-1, 1)
-
-            try:
-                model = LinearRegression().fit(X, monthly_std)
-                std_slope = model.coef_[0]
-            except:
-                std_slope = 0.0
+            std_slope = calculate_slope(monthly_std)
 
             # Calculate max drop in monthly mean values
             monthly_mean = monthly_stats['mean'].values
@@ -614,9 +627,8 @@ def detect_feature_and_point_outliers(parameter_anomaly_group_array: List[Dict],
                 values = np.array([p['value'] for p in param_history_sorted])
 
                 # Fit trend line
-                X = np.arange(len(values)).reshape(-1, 1)
                 try:
-                    trend = LinearRegression().fit(X, values).predict(X)
+                    trend = calculate_trend(values)
                     residuals = values - trend
 
                     # Calculate Z-scores of residuals
