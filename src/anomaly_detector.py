@@ -760,65 +760,69 @@ def generate_plot_data(parameter_anomaly_group_array: List[Dict],
 
     # ========== TIME-SERIES ONLY PLOTS ==========
     if data_type == 'time-series':
-        # Volume (time series)
+        # Volume (time series) - include all features
         plots['volume'] = {'series': []}
         for idx, group in enumerate(parameter_anomaly_group_array):
             group_id = group['parameterAnomalyGroupId']
             is_outlier = group.get('isOutlier', False)
 
             if group['featureArray']:
-                feature = group['featureArray'][0]
-                points = []
+                for feature in group['featureArray']:
+                    feature_name = feature.get('featureName', 'unknown')
+                    points = []
 
-                for point in feature.get('parameterHistoryArray', []):
-                    timestamp_iso = pd.to_datetime(point['createdAt']).isoformat()
-                    value = point['value']
-                    point_is_outlier = point.get('isOutlier', False)
+                    for point in feature.get('parameterHistoryArray', []):
+                        timestamp_iso = pd.to_datetime(point['createdAt']).isoformat()
+                        value = point['value']
+                        point_is_outlier = point.get('isOutlier', False)
 
-                    points.append({
-                        'timestamp': timestamp_iso,
-                        'value': float(value),
-                        'isOutlier': point_is_outlier
+                        points.append({
+                            'timestamp': timestamp_iso,
+                            'value': float(value),
+                            'isOutlier': point_is_outlier
+                        })
+
+                    plots['volume']['series'].append({
+                        'groupId': group_id,
+                        'isOutlier': is_outlier,
+                        'featureName': feature_name,
+                        'points': points
                     })
 
-                plots['volume']['series'].append({
-                    'groupId': group_id,
-                    'isOutlier': is_outlier,
-                    'points': points
-                })
-
-        # Monthly STD trends
+        # Monthly STD trends - include all features
         plots['std'] = {'series': []}
         for idx, group in enumerate(parameter_anomaly_group_array):
             group_id = group['parameterAnomalyGroupId']
             is_outlier = group.get('isOutlier', False)
 
             if group['featureArray']:
-                feature = group['featureArray'][0]
-                param_history = feature.get('parameterHistoryArray', [])
+                for feature in group['featureArray']:
+                    feature_name = feature.get('featureName', 'unknown')
+                    param_history = feature.get('parameterHistoryArray', [])
 
-                if len(param_history) > 0:
-                    df = pd.DataFrame([
-                        {'time': pd.to_datetime(p['createdAt']), 'value': p['value']}
-                        for p in param_history
-                    ])
+                    if len(param_history) > 0:
+                        df = pd.DataFrame([
+                            {'time': pd.to_datetime(p['createdAt']), 'value': p['value']}
+                            for p in param_history
+                        ])
 
-                    df['month'] = df['time'].dt.to_period('M')
-                    monthly_stats = df.groupby('month')['value'].std().reset_index()
-                    monthly_stats['timestamp'] = monthly_stats['month'].dt.to_timestamp()
+                        df['month'] = df['time'].dt.to_period('M')
+                        monthly_stats = df.groupby('month')['value'].std().reset_index()
+                        monthly_stats['timestamp'] = monthly_stats['month'].dt.to_timestamp()
 
-                    data_points = [
-                        [int(row['timestamp'].timestamp() * 1000), row['value']]
-                        for _, row in monthly_stats.iterrows()
-                    ]
+                        data_points = [
+                            [int(row['timestamp'].timestamp() * 1000), row['value']]
+                            for _, row in monthly_stats.iterrows()
+                        ]
 
-                    plots['std']['series'].append({
-                        'groupId': group_id,
-                        'groupName': group_id,
-                        'color': OUTLIER_COLOR if is_outlier else PALETTE[idx % len(PALETTE)],
-                        'lineWidth': 2 if is_outlier else 1,
-                        'dataPoints': data_points
-                    })
+                        plots['std']['series'].append({
+                            'groupId': group_id,
+                            'groupName': group_id,
+                            'featureName': feature_name,
+                            'color': OUTLIER_COLOR if is_outlier else PALETTE[idx % len(PALETTE)],
+                            'lineWidth': 2 if is_outlier else 1,
+                            'dataPoints': data_points
+                        })
 
         # Heatmap (hourly patterns)
         hours = list(range(24))
@@ -1051,91 +1055,141 @@ def render_plots(plots: Dict[str, Any], metadata: Dict[str, Any], groups: List[D
 
     saved_files = []
 
-    # 1. Time Series Plot
+    # 1. Time Series Plot - one subplot per feature
     if plots.get('volume') and plots['volume'].get('series'):
-        fig, ax = plt.subplots(figsize=(12, 6))
-        for idx, series in enumerate(plots['volume']['series']):
-            group_id = series['groupId']
-            is_outlier = series['isOutlier']
-            points = series['points']
+        # Group series by feature name
+        feature_names = sorted(set(s.get('featureName', 'unknown') for s in plots['volume']['series']))
+        n_features = len(feature_names)
 
-            if points:
-                times = [pd.to_datetime(p['timestamp']) for p in points]
-                values = [p['value'] for p in points]
+        fig, axes = plt.subplots(1, n_features, figsize=(6 * n_features, 6), squeeze=False)
+        axes = axes[0]  # Flatten to 1D array
 
-                color = OUTLIER_COLOR if is_outlier else PALETTE[idx % len(PALETTE)]
-                linewidth = 2 if is_outlier else 1
-                alpha = 1.0 if is_outlier else 0.6
-                label = f"{group_id} {'(OUTLIER)' if is_outlier else ''}"
+        for feat_idx, feature_name in enumerate(feature_names):
+            ax = axes[feat_idx]
+            group_idx = 0  # Track group index for coloring
 
-                ax.plot(times, values, color=color, linewidth=linewidth, alpha=alpha, label=label)
+            for series in plots['volume']['series']:
+                if series.get('featureName', 'unknown') != feature_name:
+                    continue
 
-        ax.set_xlabel('Time', fontsize=12)
-        ax.set_ylabel('Value', fontsize=12)
-        ax.set_title('Time Series', fontsize=14, fontweight='bold')
-        ax.legend(loc='upper right', fontsize=9)
-        ax.grid(True, alpha=0.3)
-        ax.tick_params(axis='x', rotation=45)
+                group_id = series['groupId']
+                is_outlier = series['isOutlier']
+                points = series['points']
+
+                if points:
+                    times = [pd.to_datetime(p['timestamp']) for p in points]
+                    values = [p['value'] for p in points]
+
+                    color = OUTLIER_COLOR if is_outlier else PALETTE[group_idx % len(PALETTE)]
+                    linewidth = 2 if is_outlier else 1
+                    alpha = 1.0 if is_outlier else 0.6
+                    label = f"{group_id} {'(OUTLIER)' if is_outlier else ''}"
+
+                    ax.plot(times, values, color=color, linewidth=linewidth, alpha=alpha, label=label)
+                    group_idx += 1
+
+            ax.set_xlabel('Time', fontsize=12)
+            ax.set_ylabel('Value', fontsize=12)
+            ax.set_title(f'{feature_name}', fontsize=14, fontweight='bold')
+            ax.legend(loc='upper right', fontsize=9)
+            ax.grid(True, alpha=0.3)
+            ax.tick_params(axis='x', rotation=45)
+
         plt.tight_layout()
         filepath = save_dir / '01_time_series.png'
         plt.savefig(filepath, dpi=150, bbox_inches='tight')
         plt.close()
         saved_files.append(filepath)
 
-    # 2. Box Plot
+    # 2. Box Plot - one subplot per feature
     if plots.get('boxPlot') and plots['boxPlot'].get('boxes'):
-        fig, ax = plt.subplots(figsize=(10, 6))
+        # Get all feature names from groups
+        feature_names = []
+        for group in groups:
+            if group.get('featureArray'):
+                for feature in group['featureArray']:
+                    fname = feature.get('featureName', 'unknown')
+                    if fname not in feature_names:
+                        feature_names.append(fname)
+        feature_names = sorted(feature_names)
+        n_features = len(feature_names) if feature_names else 1
+
+        fig, axes = plt.subplots(1, n_features, figsize=(5 * n_features, 6), squeeze=False)
+        axes = axes[0]
+
         boxes = plots['boxPlot']['boxes']
-        positions = list(range(len(boxes)))
-        labels = []
 
-        for idx, box in enumerate(boxes):
-            group_id = box['groupId']
-            labels.append(group_id)
+        for feat_idx, feature_name in enumerate(feature_names):
+            ax = axes[feat_idx]
+            positions = list(range(len(boxes)))
+            labels = []
 
-            for group in groups:
-                if group['parameterAnomalyGroupId'] == group_id:
-                    if group['featureArray']:
-                        values = [p['value'] for p in group['featureArray'][0].get('parameterHistoryArray', [])]
-                        if values:
-                            bp = ax.boxplot([values], positions=[idx], widths=0.6, patch_artist=True)
-                            color = OUTLIER_COLOR if group.get('isOutlier') else NORMAL_COLOR
-                            bp['boxes'][0].set_facecolor(color)
-                            bp['boxes'][0].set_alpha(0.6)
-                    break
+            for idx, box in enumerate(boxes):
+                group_id = box['groupId']
+                labels.append(group_id)
 
-        ax.set_xticks(positions)
-        ax.set_xticklabels(labels, rotation=45)
-        ax.set_ylabel('Value', fontsize=12)
-        ax.set_title('Distribution by Group', fontsize=14, fontweight='bold')
-        ax.grid(True, alpha=0.3, axis='y')
+                for group in groups:
+                    if group['parameterAnomalyGroupId'] == group_id:
+                        if group['featureArray']:
+                            for feature in group['featureArray']:
+                                if feature.get('featureName', 'unknown') == feature_name:
+                                    values = [p['value'] for p in feature.get('parameterHistoryArray', [])]
+                                    if values:
+                                        bp = ax.boxplot([values], positions=[idx], widths=0.6, patch_artist=True)
+                                        color = OUTLIER_COLOR if group.get('isOutlier') else NORMAL_COLOR
+                                        bp['boxes'][0].set_facecolor(color)
+                                        bp['boxes'][0].set_alpha(0.6)
+                                    break
+                        break
+
+            ax.set_xticks(positions)
+            ax.set_xticklabels(labels, rotation=45)
+            ax.set_ylabel('Value', fontsize=12)
+            ax.set_title(f'{feature_name}', fontsize=14, fontweight='bold')
+            ax.grid(True, alpha=0.3, axis='y')
+
         plt.tight_layout()
         filepath = save_dir / '02_box_plot.png'
         plt.savefig(filepath, dpi=150, bbox_inches='tight')
         plt.close()
         saved_files.append(filepath)
 
-    # 3. Monthly STD Trends
+    # 3. Monthly STD Trends - one subplot per feature
     if plots.get('std') and plots['std'].get('series'):
-        fig, ax = plt.subplots(figsize=(12, 6))
-        for series in plots['std']['series']:
-            group_id = series['groupId']
-            data_points = series['dataPoints']
-            color = series['color']
-            linewidth = series['lineWidth']
+        # Group series by feature name
+        feature_names = sorted(set(s.get('featureName', 'unknown') for s in plots['std']['series']))
+        n_features = len(feature_names)
 
-            if data_points:
-                times = [pd.to_datetime(p[0], unit='ms') for p in data_points]
-                values = [p[1] for p in data_points]
+        fig, axes = plt.subplots(1, n_features, figsize=(6 * n_features, 6), squeeze=False)
+        axes = axes[0]
 
-                ax.plot(times, values, label=group_id, color=color, linewidth=linewidth, marker='o', markersize=4)
+        for feat_idx, feature_name in enumerate(feature_names):
+            ax = axes[feat_idx]
+            group_idx = 0
 
-        ax.set_xlabel('Month', fontsize=12)
-        ax.set_ylabel('Standard Deviation', fontsize=12)
-        ax.set_title('Monthly Variability Trend', fontsize=14, fontweight='bold')
-        ax.legend(loc='upper right', fontsize=9)
-        ax.grid(True, alpha=0.3)
-        ax.tick_params(axis='x', rotation=45)
+            for series in plots['std']['series']:
+                if series.get('featureName', 'unknown') != feature_name:
+                    continue
+
+                group_id = series['groupId']
+                data_points = series['dataPoints']
+                color = series['color']
+                linewidth = series['lineWidth']
+
+                if data_points:
+                    times = [pd.to_datetime(p[0], unit='ms') for p in data_points]
+                    values = [p[1] for p in data_points]
+
+                    ax.plot(times, values, label=group_id, color=color, linewidth=linewidth, marker='o', markersize=4)
+                    group_idx += 1
+
+            ax.set_xlabel('Month', fontsize=12)
+            ax.set_ylabel('Standard Deviation', fontsize=12)
+            ax.set_title(f'{feature_name}', fontsize=14, fontweight='bold')
+            ax.legend(loc='upper right', fontsize=9)
+            ax.grid(True, alpha=0.3)
+            ax.tick_params(axis='x', rotation=45)
+
         plt.tight_layout()
         filepath = save_dir / '03_monthly_std.png'
         plt.savefig(filepath, dpi=150, bbox_inches='tight')
