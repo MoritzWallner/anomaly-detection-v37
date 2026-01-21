@@ -1061,8 +1061,8 @@ def render_plots(plots: Dict[str, Any], metadata: Dict[str, Any], groups: List[D
         feature_names = sorted(set(s.get('featureName', 'unknown') for s in plots['volume']['series']))
         n_features = len(feature_names)
 
-        fig, axes = plt.subplots(1, n_features, figsize=(6 * n_features, 6), squeeze=False)
-        axes = axes[0]  # Flatten to 1D array
+        fig, axes = plt.subplots(n_features, 1, figsize=(12, 5 * n_features), squeeze=False)
+        axes = axes[:, 0]  # Flatten to 1D array
 
         for feat_idx, feature_name in enumerate(feature_names):
             ax = axes[feat_idx]
@@ -1114,8 +1114,8 @@ def render_plots(plots: Dict[str, Any], metadata: Dict[str, Any], groups: List[D
         feature_names = sorted(feature_names)
         n_features = len(feature_names) if feature_names else 1
 
-        fig, axes = plt.subplots(1, n_features, figsize=(5 * n_features, 6), squeeze=False)
-        axes = axes[0]
+        fig, axes = plt.subplots(n_features, 1, figsize=(10, 5 * n_features), squeeze=False)
+        axes = axes[:, 0]
 
         boxes = plots['boxPlot']['boxes']
 
@@ -1160,8 +1160,8 @@ def render_plots(plots: Dict[str, Any], metadata: Dict[str, Any], groups: List[D
         feature_names = sorted(set(s.get('featureName', 'unknown') for s in plots['std']['series']))
         n_features = len(feature_names)
 
-        fig, axes = plt.subplots(1, n_features, figsize=(6 * n_features, 6), squeeze=False)
-        axes = axes[0]
+        fig, axes = plt.subplots(n_features, 1, figsize=(12, 5 * n_features), squeeze=False)
+        axes = axes[:, 0]
 
         for feat_idx, feature_name in enumerate(feature_names):
             ax = axes[feat_idx]
