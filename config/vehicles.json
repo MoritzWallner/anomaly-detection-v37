@@ -2,5 +2,6 @@
   "dataset": "vehicles",
   "constraints": {
     "voltage": { "min": 320, "max": 460 }
-  }
+  },
+  "units": { "voltage": "V", "soc": "%" }
 }

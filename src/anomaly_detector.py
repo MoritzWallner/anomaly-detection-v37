@@ -133,9 +133,11 @@ def detect_anomalies(request_data: Dict[str, Any], save_plots_path: str = None) 
         # Backward compatibility: treat list as time-series groups
         parameter_anomaly_group_array = request_data
         data_type = 'time-series'
+        units = {}
     else:
         parameter_anomaly_group_array = request_data.get('groups', [])
         data_type = request_data.get('dataType', 'time-series')
+        units = request_data.get('units', {})
 
     _print("=" * 80)
     _print(f"ANOMALY DETECTION PIPELINE (dataType: {data_type})")
@@ -201,7 +203,7 @@ def detect_anomalies(request_data: Dict[str, Any], save_plots_path: str = None) 
     plot_data = generate_plot_data(parameter_anomaly_group_array, feature_importance_dict, group_outlier_flags, data_type, feature_matrix, feature_names)
 
     # Extract metadata
-    metadata = extract_metadata(parameter_anomaly_group_array, data_type)
+    metadata = extract_metadata(parameter_anomaly_group_array, data_type, units)
 
     # Render and save plots if path provided
     if save_plots_path:
@@ -990,9 +992,14 @@ def generate_plot_data(parameter_anomaly_group_array: List[Dict],
     return plots
 
 
-def extract_metadata(parameter_anomaly_group_array: List[Dict], data_type: str = 'time-series') -> Dict[str, Any]:
+def extract_metadata(parameter_anomaly_group_array: List[Dict], data_type: str = 'time-series', units: Dict[str, str] = None) -> Dict[str, Any]:
     """
     Extract metadata about the analysis for frontend display.
+
+    Args:
+        parameter_anomaly_group_array: List of analyzed groups
+        data_type: 'time-series' or 'cross-sectional'
+        units: Dict mapping feature names to unit strings (e.g., {"voltage": "V", "soc": "%"})
     """
 
     outlier_groups = [g for g in parameter_anomaly_group_array if g.get('isOutlier', False)]
@@ -1019,7 +1026,8 @@ def extract_metadata(parameter_anomaly_group_array: List[Dict], data_type: str =
         'dataType': data_type,
         'totalGroups': len(parameter_anomaly_group_array),
         'anomalousGroups': len(outlier_groups),
-        'featuresAnalyzed': sorted(list(feature_names))
+        'featuresAnalyzed': sorted(list(feature_names)),
+        'units': units or {}
     }
 
     # Add date range only for time-series
@@ -1048,6 +1056,9 @@ def render_plots(plots: Dict[str, Any], metadata: Dict[str, Any], groups: List[D
     OUTLIER_COLOR = '#FF4444'
     NORMAL_COLOR = '#4682B4'
     PALETTE = ['#4682B4', '#FF8C00', '#32CD32', '#FF69B4', '#FFD700', '#9370DB', '#00CED1', '#FF6347']
+
+    # Extract units from metadata
+    units = metadata.get('units', {})
 
     # Create output directory
     save_dir = Path(save_path).parent
@@ -1089,7 +1100,9 @@ def render_plots(plots: Dict[str, Any], metadata: Dict[str, Any], groups: List[D
                     group_idx += 1
 
             ax.set_xlabel('Time', fontsize=12)
-            ax.set_ylabel('Value', fontsize=12)
+            unit = units.get(feature_name, '')
+            ylabel = f'Value ({unit})' if unit else 'Value'
+            ax.set_ylabel(ylabel, fontsize=12)
             ax.set_title(f'{feature_name}', fontsize=14, fontweight='bold')
             ax.legend(loc='upper right', fontsize=9)
             ax.grid(True, alpha=0.3)
@@ -1144,7 +1157,9 @@ def render_plots(plots: Dict[str, Any], metadata: Dict[str, Any], groups: List[D
 
             ax.set_xticks(positions)
             ax.set_xticklabels(labels, rotation=45)
-            ax.set_ylabel('Value', fontsize=12)
+            unit = units.get(feature_name, '')
+            ylabel = f'Value ({unit})' if unit else 'Value'
+            ax.set_ylabel(ylabel, fontsize=12)
             ax.set_title(f'{feature_name}', fontsize=14, fontweight='bold')
             ax.grid(True, alpha=0.3, axis='y')
 
@@ -1184,7 +1199,9 @@ def render_plots(plots: Dict[str, Any], metadata: Dict[str, Any], groups: List[D
                     group_idx += 1
 
             ax.set_xlabel('Month', fontsize=12)
-            ax.set_ylabel('Standard Deviation', fontsize=12)
+            unit = units.get(feature_name, '')
+            ylabel = f'Std Dev ({unit})' if unit else 'Standard Deviation'
+            ax.set_ylabel(ylabel, fontsize=12)
             ax.set_title(f'{feature_name}', fontsize=14, fontweight='bold')
             ax.legend(loc='upper right', fontsize=9)
             ax.grid(True, alpha=0.3)

@@ -1,4 +1,5 @@
 {
   "dataset": "traffic",
-  "constraints": {}
+  "constraints": {},
+  "units": { "vehicle_count": "vehicles/hour" }
 }

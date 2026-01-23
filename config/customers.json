@@ -1,4 +1,10 @@
 {
   "dataset": "customers",
-  "constraints": {}
+  "constraints": {},
+  "units": {
+    "avg_transaction": "$",
+    "monthly_logins": "count",
+    "support_tickets": "count",
+    "account_age_days": "days"
+  }
 }

@@ -62,9 +62,10 @@ def transform(csv_path: str = None, config_path: str = None) -> Dict[str, Any]:
     if csv_path is None:
         csv_path = Path(__file__).parent.parent / "datasets" / "customers.csv"
 
-    # Load config with min/max constraints
+    # Load config with min/max constraints and units
     config = load_config(config_path)
     constraints = config.get("constraints", {})
+    units = config.get("units", {})
 
     df = pd.read_csv(csv_path)
 
@@ -115,7 +116,8 @@ def transform(csv_path: str = None, config_path: str = None) -> Dict[str, Any]:
 
     return {
         "dataType": "cross-sectional",
-        "groups": groups
+        "groups": groups,
+        "units": units
     }
 
 
