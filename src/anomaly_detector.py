@@ -117,7 +117,7 @@ def detect_anomalies(request_data: Dict[str, Any], save_plots_path: str = None) 
         save_plots_path: Optional path to save visualization PNG (e.g., "diagrams/vehicles/anomaly_analysis.png")
 
     For time-series data:
-        - Uses monthly aggregation to derive shapValues (slope, max_drop, avg_std)
+        - Uses monthly aggregation to derive temporalFeatures (slope, max_drop, avg_std)
         - Detects degradation trends over time
 
     For cross-sectional data:
@@ -227,8 +227,8 @@ def build_time_series_features(parameter_anomaly_group_array: List[Dict]) -> tup
         group_ids: List of group IDs
         feature_names: List of feature names (with _slope, _max_drop, _avg_std suffixes)
     """
-    _print("\n[2/5] Calculating shapValues (slope, max_drop, avg_std)...")
-    calculate_shap_values(parameter_anomaly_group_array)
+    _print("\n[2/5] Calculating temporalFeatures (slope, max_drop, avg_std)...")
+    calculate_temporal_features(parameter_anomaly_group_array)
 
     _print("\n[3/5] Building feature matrix for group comparison...")
     feature_matrix, group_ids = build_feature_matrix(parameter_anomaly_group_array)
@@ -282,8 +282,8 @@ def build_cross_sectional_features(parameter_anomaly_group_array: List[Dict]) ->
             else:
                 group_features.append(0.0)
 
-            # Set shapValues to None for cross-sectional (not applicable)
-            feature['shapValues'] = None
+            # Set temporalFeatures to None for cross-sectional (not applicable)
+            feature['temporalFeatures'] = None
 
         feature_vectors.append(group_features)
 
@@ -297,9 +297,9 @@ def build_cross_sectional_features(parameter_anomaly_group_array: List[Dict]) ->
     return feature_matrix, group_ids, feature_names
 
 
-def calculate_shap_values(parameter_anomaly_group_array: List[Dict]) -> None:
+def calculate_temporal_features(parameter_anomaly_group_array: List[Dict]) -> None:
     """
-    Calculate shapValues [slope, max_drop, avg_std] for each feature in each group.
+    Calculate temporalFeatures [slope, max_drop, avg_std] for each feature in each group.
 
     Uses monthly aggregation approach (like find_bad_cell_car.py) to detect long-term trends:
     - Slope: Linear regression on monthly std/mean (degradation indicator)
@@ -315,7 +315,7 @@ def calculate_shap_values(parameter_anomaly_group_array: List[Dict]) -> None:
             param_history = feature['parameterHistoryArray']
 
             if len(param_history) < 2:
-                feature['shapValues'] = [0.0, 0.0, 0.0]
+                feature['temporalFeatures'] = [0.0, 0.0, 0.0]
                 continue
 
             # Sort by time
@@ -343,7 +343,7 @@ def calculate_shap_values(parameter_anomaly_group_array: List[Dict]) -> None:
                 max_drop = np.min(diffs) if len(diffs) > 0 else 0.0
                 avg_std = np.std(diffs) if len(diffs) > 0 else 0.0
 
-                feature['shapValues'] = [float(slope), float(max_drop), float(avg_std)]
+                feature['temporalFeatures'] = [float(slope), float(max_drop), float(avg_std)]
                 _print(f"  {group_id} - {feature_name}: slope={slope:.4f} (raw), max_drop={max_drop:.4f}, avg_std={avg_std:.4f}")
                 continue
 
@@ -365,7 +365,7 @@ def calculate_shap_values(parameter_anomaly_group_array: List[Dict]) -> None:
             else:
                 avg_std = 0.0
 
-            feature['shapValues'] = [float(std_slope), float(max_drop), float(avg_std)]
+            feature['temporalFeatures'] = [float(std_slope), float(max_drop), float(avg_std)]
 
             _print(f"  {group_id} - {feature_name}: std_slope={std_slope:.4f} (monthly), max_drop={max_drop:.4f}, avg_std={avg_std:.4f}")
 
@@ -385,8 +385,8 @@ def build_feature_matrix(parameter_anomaly_group_array: List[Dict]) -> tuple:
     for group in parameter_anomaly_group_array:
         row = []
         for feature in group['featureArray']:
-            # Flatten shapValues into row
-            row.extend(feature.get('shapValues', [0.0, 0.0, 0.0]))
+            # Flatten temporalFeatures into row
+            row.extend(feature.get('temporalFeatures', [0.0, 0.0, 0.0]))
 
         feature_matrix.append(row)
         group_ids.append(group['parameterAnomalyGroupId'])
@@ -607,7 +607,7 @@ def detect_feature_and_point_outliers(parameter_anomaly_group_array: List[Dict],
             # Feature-level detection using importance scores
             if is_outlier_group and feature_importance_dict:
                 if data_type == 'time-series':
-                    # Get importance scores for this feature's shapValues
+                    # Get importance scores for this feature's temporalFeatures
                     slope_importance = feature_importance_dict.get(f"{feature_name}_slope", 0)
                     drop_importance = feature_importance_dict.get(f"{feature_name}_max_drop", 0)
                     avg_std_importance = feature_importance_dict.get(f"{feature_name}_avg_std", 0)
@@ -651,7 +651,7 @@ def generate_plot_data(parameter_anomaly_group_array: List[Dict],
         'std': None,         # Time-series only
         'heatmap': None,     # Both (different implementation)
         'boxPlot': None,     # Both
-        'shapValues': None,  # Time-series only
+        'temporalFeatures': None,  # Time-series only
         'scatter': None,     # Both (different implementation)
         'featureImportance': None,  # Both
         'distribution': None,       # Cross-sectional only
@@ -676,9 +676,9 @@ def generate_plot_data(parameter_anomaly_group_array: List[Dict],
                 if feature['featureName'] == fname:
                     if data_type == 'time-series':
                         # Use slope as contribution metric
-                        shapvals = feature.get('shapValues', [0, 0, 0])
-                        if shapvals:
-                            values.append(abs(shapvals[0]))
+                        temporalvals = feature.get('temporalFeatures', [0, 0, 0])
+                        if temporalvals:
+                            values.append(abs(temporalvals[0]))
                         else:
                             values.append(0)
                     else:
@@ -868,24 +868,24 @@ def generate_plot_data(parameter_anomaly_group_array: List[Dict],
             }
         }
 
-        # ShapValues bar chart
-        plots['shapValues'] = {'groups': []}
+        # Temporal Features bar chart
+        plots['temporalFeatures'] = {'groups': []}
         for idx, group in enumerate(parameter_anomaly_group_array):
             group_id = group['parameterAnomalyGroupId']
             is_outlier = group.get('isOutlier', False)
 
             features = []
             for feature in group['featureArray']:
-                shapvals = feature.get('shapValues', [0, 0, 0])
-                if shapvals:
+                temporalvals = feature.get('temporalFeatures', [0, 0, 0])
+                if temporalvals:
                     features.append({
                         'featureName': feature.get('featureName', 'unknown'),
-                        'slope': float(shapvals[0]),
-                        'maxDrop': float(shapvals[1]),
-                        'avg_std': float(shapvals[2])
+                        'slope': float(temporalvals[0]),
+                        'maxDrop': float(temporalvals[1]),
+                        'avg_std': float(temporalvals[2])
                     })
 
-            plots['shapValues']['groups'].append({
+            plots['temporalFeatures']['groups'].append({
                 'groupId': group_id,
                 'isOutlier': is_outlier,
                 'features': features
@@ -897,7 +897,7 @@ def generate_plot_data(parameter_anomaly_group_array: List[Dict],
             group_id = group['parameterAnomalyGroupId']
             is_outlier = group.get('isOutlier', False)
 
-            slopes = [f.get('shapValues', [0, 0, 0])[0] for f in group['featureArray'] if f.get('shapValues')]
+            slopes = [f.get('temporalFeatures', [0, 0, 0])[0] for f in group['featureArray'] if f.get('temporalFeatures')]
             degradation_score = float(np.mean([abs(s) for s in slopes])) if slopes else 0.0
             z_score = group.get('zScore', 0.0)
 
@@ -1277,10 +1277,10 @@ def render_plots(plots: Dict[str, Any], metadata: Dict[str, Any], groups: List[D
         saved_files.append(filepath)
 
     # 7. Slope Values per Group (Degradation Indicator)
-    if plots.get('shapValues') and plots['shapValues'].get('groups'):
+    if plots.get('temporalFeatures') and plots['temporalFeatures'].get('groups'):
         fig, ax = plt.subplots(figsize=(10, 6))
 
-        groups_data = plots['shapValues']['groups']
+        groups_data = plots['temporalFeatures']['groups']
         group_ids = [g['groupId'] for g in groups_data]
 
         # Calculate average slope per group (across all features)
@@ -1307,9 +1307,9 @@ def render_plots(plots: Dict[str, Any], metadata: Dict[str, Any], groups: List[D
         plt.close()
         saved_files.append(filepath)
 
-    # 8. ShapValues per Feature per Group
-    if plots.get('shapValues') and plots['shapValues'].get('groups'):
-        groups_data = plots['shapValues']['groups']
+    # 8. Temporal Features per Feature per Group
+    if plots.get('temporalFeatures') and plots['temporalFeatures'].get('groups'):
+        groups_data = plots['temporalFeatures']['groups']
         n_groups = len(groups_data)
 
         if n_groups > 0 and groups_data[0]['features']:
@@ -1360,9 +1360,9 @@ def render_plots(plots: Dict[str, Any], metadata: Dict[str, Any], groups: List[D
                 ax.axhline(y=0, color='black', linestyle='-', linewidth=0.5)
                 ax.grid(True, alpha=0.3, axis='y')
 
-            plt.suptitle('ShapValues by Feature', fontsize=14, fontweight='bold')
+            plt.suptitle('Temporal Features by Group', fontsize=14, fontweight='bold')
             plt.tight_layout()
-            filepath = save_dir / '08_shapvalues_by_feature.png'
+            filepath = save_dir / '08_temporal_features.png'
             plt.savefig(filepath, dpi=150, bbox_inches='tight')
             plt.close()
             saved_files.append(filepath)
