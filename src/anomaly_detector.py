@@ -207,7 +207,7 @@ def detect_anomalies(request_data: Dict[str, Any], save_plots_path: str = None) 
 
     # Render and save plots if path provided
     if save_plots_path:
-        render_plots(plot_data, metadata, parameter_anomaly_group_array, save_plots_path)
+        render_plots(plot_data, metadata, parameter_anomaly_group_array, save_plots_path, data_type)
 
     # Return enhanced structure
     return {
@@ -1042,7 +1042,7 @@ def extract_metadata(parameter_anomaly_group_array: List[Dict], data_type: str =
     return metadata
 
 
-def render_plots(plots: Dict[str, Any], metadata: Dict[str, Any], groups: List[Dict], save_path: str):
+def render_plots(plots: Dict[str, Any], metadata: Dict[str, Any], groups: List[Dict], save_path: str, data_type: str = 'time-series'):
     """
     Render matplotlib visualizations and save each as a separate image file.
 
@@ -1051,6 +1051,7 @@ def render_plots(plots: Dict[str, Any], metadata: Dict[str, Any], groups: List[D
         metadata: Metadata from extract_metadata()
         groups: The analyzed groups with outlier flags
         save_path: Base path for saving PNG files (directory will be used)
+        data_type: Either 'time-series' or 'cross-sectional'
     """
     # Color constants
     OUTLIER_COLOR = '#FF4444'
@@ -1114,7 +1115,7 @@ def render_plots(plots: Dict[str, Any], metadata: Dict[str, Any], groups: List[D
         plt.close()
         saved_files.append(filepath)
 
-    # 2. Strip Plot - one subplot per feature (2-column layout)
+    # 2. Group Comparison Plot - box plot for time-series, strip plot for cross-sectional
     if plots.get('boxPlot') and plots['boxPlot'].get('boxes'):
         # Get all feature names from groups
         feature_names = []
@@ -1127,60 +1128,103 @@ def render_plots(plots: Dict[str, Any], metadata: Dict[str, Any], groups: List[D
         feature_names = sorted(feature_names)
         n_features = len(feature_names) if feature_names else 1
 
-        # Two-column layout
-        n_cols = 2
-        n_rows = (n_features + 1) // 2  # ceil division
-        fig, axes = plt.subplots(n_rows, n_cols, figsize=(14, 4 * n_rows), squeeze=False)
-
         boxes = plots['boxPlot']['boxes']
 
-        for feat_idx, feature_name in enumerate(feature_names):
-            row, col = feat_idx // 2, feat_idx % 2
-            ax = axes[row, col]
-            positions = list(range(len(boxes)))
-            labels = []
-            all_values = []
+        if data_type == 'time-series':
+            # Box plot per feature (1-column layout - one row per feature)
+            fig, axes = plt.subplots(n_features, 1, figsize=(12, 5 * n_features), squeeze=False)
+            axes = axes[:, 0]  # Flatten to 1D
 
-            for idx, box in enumerate(boxes):
-                group_id = box['groupId']
-                labels.append(group_id)
+            for feat_idx, feature_name in enumerate(feature_names):
+                ax = axes[feat_idx]
+                labels = []
 
-                for group in groups:
-                    if group['parameterAnomalyGroupId'] == group_id:
-                        if group['featureArray']:
-                            for feature in group['featureArray']:
-                                if feature.get('featureName', 'unknown') == feature_name:
-                                    values = [p['value'] for p in feature.get('parameterHistoryArray', [])]
-                                    if values:
-                                        value = values[0]
-                                        all_values.append(value)
-                                        color = OUTLIER_COLOR if group.get('isOutlier') else NORMAL_COLOR
-                                        ax.scatter(idx, value, c=color, s=80, zorder=3,
-                                                   edgecolor='white', linewidth=1)
-                                    break
-                        break
+                for idx, box in enumerate(boxes):
+                    group_id = box['groupId']
+                    labels.append(group_id)
 
-            # Add mean reference line
-            if all_values:
-                ax.axhline(y=np.mean(all_values), color='gray', linestyle='--', alpha=0.5)
+                    for group in groups:
+                        if group['parameterAnomalyGroupId'] == group_id:
+                            if group.get('featureArray'):
+                                for feature in group['featureArray']:
+                                    if feature.get('featureName', 'unknown') == feature_name:
+                                        values = [p['value'] for p in feature.get('parameterHistoryArray', [])]
+                                        if values:
+                                            bp = ax.boxplot([values], positions=[idx], widths=0.6, patch_artist=True)
+                                            color = OUTLIER_COLOR if group.get('isOutlier') else NORMAL_COLOR
+                                            bp['boxes'][0].set_facecolor(color)
+                                            bp['boxes'][0].set_alpha(0.6)
+                                        break
+                            break
 
-            ax.set_xticks(positions)
-            ax.set_xticklabels(labels, rotation=45, ha='right')
-            unit = units.get(feature_name, '')
-            ylabel = f'Value ({unit})' if unit else 'Value'
-            ax.set_ylabel(ylabel, fontsize=12)
-            ax.set_title(f'{feature_name}', fontsize=14, fontweight='bold')
-            ax.grid(True, alpha=0.3, axis='y')
+                ax.set_xticks(range(len(labels)))
+                ax.set_xticklabels(labels, rotation=45, ha='right')
+                unit = units.get(feature_name, '')
+                ylabel = f'Value ({unit})' if unit else 'Value'
+                ax.set_ylabel(ylabel, fontsize=12)
+                ax.set_xlabel('Group', fontsize=12)
+                ax.set_title(f'{feature_name}', fontsize=14, fontweight='bold')
+                ax.grid(True, alpha=0.3, axis='y')
 
-        # Hide empty subplot if odd number of features
-        if n_features % 2 == 1:
-            axes[-1, -1].set_visible(False)
+            plt.tight_layout()
+            filepath = save_dir / '02_box_plot.png'
+            plt.savefig(filepath, dpi=150, bbox_inches='tight')
+            plt.close()
+            saved_files.append(filepath)
 
-        plt.tight_layout()
-        filepath = save_dir / '02_box_plot.png'
-        plt.savefig(filepath, dpi=150, bbox_inches='tight')
-        plt.close()
-        saved_files.append(filepath)
+        else:
+            # Strip Plot for cross-sectional (2-column layout)
+            n_cols = 2
+            n_rows = (n_features + 1) // 2  # ceil division
+            fig, axes = plt.subplots(n_rows, n_cols, figsize=(14, 4 * n_rows), squeeze=False)
+
+            for feat_idx, feature_name in enumerate(feature_names):
+                row, col = feat_idx // 2, feat_idx % 2
+                ax = axes[row, col]
+                positions = list(range(len(boxes)))
+                labels = []
+                all_values = []
+
+                for idx, box in enumerate(boxes):
+                    group_id = box['groupId']
+                    labels.append(group_id)
+
+                    for group in groups:
+                        if group['parameterAnomalyGroupId'] == group_id:
+                            if group.get('featureArray'):
+                                for feature in group['featureArray']:
+                                    if feature.get('featureName', 'unknown') == feature_name:
+                                        values = [p['value'] for p in feature.get('parameterHistoryArray', [])]
+                                        if values:
+                                            value = values[0]
+                                            all_values.append(value)
+                                            color = OUTLIER_COLOR if group.get('isOutlier') else NORMAL_COLOR
+                                            ax.scatter(idx, value, c=color, s=80, zorder=3,
+                                                       edgecolor='white', linewidth=1)
+                                        break
+                            break
+
+                # Add mean reference line
+                if all_values:
+                    ax.axhline(y=np.mean(all_values), color='gray', linestyle='--', alpha=0.5)
+
+                ax.set_xticks(positions)
+                ax.set_xticklabels(labels, rotation=45, ha='right')
+                unit = units.get(feature_name, '')
+                ylabel = f'Value ({unit})' if unit else 'Value'
+                ax.set_ylabel(ylabel, fontsize=12)
+                ax.set_title(f'{feature_name}', fontsize=14, fontweight='bold')
+                ax.grid(True, alpha=0.3, axis='y')
+
+            # Hide empty subplot if odd number of features
+            if n_features % 2 == 1:
+                axes[-1, -1].set_visible(False)
+
+            plt.tight_layout()
+            filepath = save_dir / '02_group_comparison.png'
+            plt.savefig(filepath, dpi=150, bbox_inches='tight')
+            plt.close()
+            saved_files.append(filepath)
 
     # 3. Monthly STD Trends - one subplot per feature
     if plots.get('std') and plots['std'].get('series'):
