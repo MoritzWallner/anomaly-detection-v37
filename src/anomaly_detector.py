@@ -117,7 +117,7 @@ def detect_anomalies(request_data: Dict[str, Any], save_plots_path: str = None) 
         save_plots_path: Optional path to save visualization PNG (e.g., "diagrams/vehicles/anomaly_analysis.png")
 
     For time-series data:
-        - Uses monthly aggregation to derive shapValues (slope, max_drop, derivative)
+        - Uses monthly aggregation to derive shapValues (slope, max_drop, avg_std)
         - Detects degradation trends over time
 
     For cross-sectional data:
@@ -220,14 +220,14 @@ def detect_anomalies(request_data: Dict[str, Any], save_plots_path: str = None) 
 def build_time_series_features(parameter_anomaly_group_array: List[Dict]) -> tuple:
     """
     Build feature matrix for time-series data.
-    Uses monthly aggregation to derive [slope, max_drop, derivative] per feature.
+    Uses monthly aggregation to derive [slope, max_drop, avg_std] per feature.
 
     Returns:
         feature_matrix: np.array of shape (n_groups, n_features * 3)
         group_ids: List of group IDs
-        feature_names: List of feature names (with _slope, _max_drop, _derivative suffixes)
+        feature_names: List of feature names (with _slope, _max_drop, _avg_std suffixes)
     """
-    _print("\n[2/5] Calculating shapValues (slope, max_drop, derivative)...")
+    _print("\n[2/5] Calculating shapValues (slope, max_drop, avg_std)...")
     calculate_shap_values(parameter_anomaly_group_array)
 
     _print("\n[3/5] Building feature matrix for group comparison...")
@@ -240,7 +240,7 @@ def build_time_series_features(parameter_anomaly_group_array: List[Dict]) -> tup
         feature_names.extend([
             f"{feature_name}_slope",
             f"{feature_name}_max_drop",
-            f"{feature_name}_derivative"
+            f"{feature_name}_avg_std"
         ])
 
     return feature_matrix, group_ids, feature_names
@@ -299,12 +299,12 @@ def build_cross_sectional_features(parameter_anomaly_group_array: List[Dict]) ->
 
 def calculate_shap_values(parameter_anomaly_group_array: List[Dict]) -> None:
     """
-    Calculate shapValues [slope, max_drop, derivative] for each feature in each group.
+    Calculate shapValues [slope, max_drop, avg_std] for each feature in each group.
 
     Uses monthly aggregation approach (like find_bad_cell_car.py) to detect long-term trends:
     - Slope: Linear regression on monthly std/mean (degradation indicator)
     - Max Drop: Largest consecutive decrease in monthly values
-    - Derivative: Volatility of monthly changes
+    - Avg Std: Average of monthly standard deviations (volatility indicator)
     """
 
     for group in parameter_anomaly_group_array:
@@ -341,10 +341,10 @@ def calculate_shap_values(parameter_anomaly_group_array: List[Dict]) -> None:
 
                 diffs = np.diff(values) if len(values) > 1 else np.array([0])
                 max_drop = np.min(diffs) if len(diffs) > 0 else 0.0
-                derivative = np.std(diffs) if len(diffs) > 0 else 0.0
+                avg_std = np.std(diffs) if len(diffs) > 0 else 0.0
 
-                feature['shapValues'] = [float(slope), float(max_drop), float(derivative)]
-                _print(f"  {group_id} - {feature_name}: slope={slope:.4f} (raw), max_drop={max_drop:.4f}, deriv={derivative:.4f}")
+                feature['shapValues'] = [float(slope), float(max_drop), float(avg_std)]
+                _print(f"  {group_id} - {feature_name}: slope={slope:.4f} (raw), max_drop={max_drop:.4f}, avg_std={avg_std:.4f}")
                 continue
 
             # Calculate slope on monthly STD (key indicator of degradation - increasing variability)
@@ -359,15 +359,15 @@ def calculate_shap_values(parameter_anomaly_group_array: List[Dict]) -> None:
             else:
                 max_drop = 0.0
 
-            # Calculate derivative (volatility) from monthly std
+            # Calculate avg_std (volatility) from monthly std
             if len(monthly_std) > 1:
-                derivative = np.mean(monthly_std)  # Average variability
+                avg_std = np.mean(monthly_std)  # Average variability
             else:
-                derivative = 0.0
+                avg_std = 0.0
 
-            feature['shapValues'] = [float(std_slope), float(max_drop), float(derivative)]
+            feature['shapValues'] = [float(std_slope), float(max_drop), float(avg_std)]
 
-            _print(f"  {group_id} - {feature_name}: std_slope={std_slope:.4f} (monthly), max_drop={max_drop:.4f}, avg_std={derivative:.4f}")
+            _print(f"  {group_id} - {feature_name}: std_slope={std_slope:.4f} (monthly), max_drop={max_drop:.4f}, avg_std={avg_std:.4f}")
 
 
 def build_feature_matrix(parameter_anomaly_group_array: List[Dict]) -> tuple:
@@ -610,8 +610,8 @@ def detect_feature_and_point_outliers(parameter_anomaly_group_array: List[Dict],
                     # Get importance scores for this feature's shapValues
                     slope_importance = feature_importance_dict.get(f"{feature_name}_slope", 0)
                     drop_importance = feature_importance_dict.get(f"{feature_name}_max_drop", 0)
-                    deriv_importance = feature_importance_dict.get(f"{feature_name}_derivative", 0)
-                    total_importance = slope_importance + drop_importance + deriv_importance
+                    avg_std_importance = feature_importance_dict.get(f"{feature_name}_avg_std", 0)
+                    total_importance = slope_importance + drop_importance + avg_std_importance
                 else:
                     # Cross-sectional: direct feature importance
                     total_importance = feature_importance_dict.get(feature_name, 0)
@@ -730,7 +730,7 @@ def generate_plot_data(parameter_anomaly_group_array: List[Dict],
     plots['featureImportance'] = {'features': []}
     if feature_importance_dict:
         if data_type == 'time-series':
-            # Aggregate by feature (sum importance across slope/max_drop/derivative)
+            # Aggregate by feature (sum importance across slope/max_drop/avg_std)
             feature_importance_agg = {}
             for key, importance in feature_importance_dict.items():
                 parts = key.rsplit('_', 1)
@@ -882,7 +882,7 @@ def generate_plot_data(parameter_anomaly_group_array: List[Dict],
                         'featureName': feature.get('featureName', 'unknown'),
                         'slope': float(shapvals[0]),
                         'maxDrop': float(shapvals[1]),
-                        'derivative': float(shapvals[2])
+                        'avg_std': float(shapvals[2])
                     })
 
             plots['shapValues']['groups'].append({
@@ -1326,7 +1326,7 @@ def render_plots(plots: Dict[str, Any], metadata: Dict[str, Any], groups: List[D
                 group_ids = []
                 slopes = []
                 max_drops = []
-                derivatives = []
+                avg_stds = []
                 is_outliers = []
 
                 for g in groups_data:
@@ -1336,7 +1336,7 @@ def render_plots(plots: Dict[str, Any], metadata: Dict[str, Any], groups: List[D
                         if f['featureName'] == feature_name:
                             slopes.append(f['slope'])
                             max_drops.append(f['maxDrop'])
-                            derivatives.append(f['derivative'])
+                            avg_stds.append(f['avg_std'])
                             break
 
                 x = np.arange(len(group_ids))
@@ -1344,7 +1344,7 @@ def render_plots(plots: Dict[str, Any], metadata: Dict[str, Any], groups: List[D
 
                 ax.bar(x - width, slopes, width, label='Slope', color='#4682B4')
                 ax.bar(x, max_drops, width, label='Max Drop', color='#FF8C00')
-                ax.bar(x + width, derivatives, width, label='Derivative', color='#32CD32')
+                ax.bar(x + width, avg_stds, width, label='Average Std', color='#32CD32')
 
                 # Highlight outlier groups
                 for i, is_outlier in enumerate(is_outliers):
