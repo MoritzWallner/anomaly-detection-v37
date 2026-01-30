@@ -1114,7 +1114,7 @@ def render_plots(plots: Dict[str, Any], metadata: Dict[str, Any], groups: List[D
         plt.close()
         saved_files.append(filepath)
 
-    # 2. Box Plot - one subplot per feature
+    # 2. Strip Plot - one subplot per feature (2-column layout)
     if plots.get('boxPlot') and plots['boxPlot'].get('boxes'):
         # Get all feature names from groups
         feature_names = []
@@ -1127,15 +1127,19 @@ def render_plots(plots: Dict[str, Any], metadata: Dict[str, Any], groups: List[D
         feature_names = sorted(feature_names)
         n_features = len(feature_names) if feature_names else 1
 
-        fig, axes = plt.subplots(n_features, 1, figsize=(10, 5 * n_features), squeeze=False)
-        axes = axes[:, 0]
+        # Two-column layout
+        n_cols = 2
+        n_rows = (n_features + 1) // 2  # ceil division
+        fig, axes = plt.subplots(n_rows, n_cols, figsize=(14, 4 * n_rows), squeeze=False)
 
         boxes = plots['boxPlot']['boxes']
 
         for feat_idx, feature_name in enumerate(feature_names):
-            ax = axes[feat_idx]
+            row, col = feat_idx // 2, feat_idx % 2
+            ax = axes[row, col]
             positions = list(range(len(boxes)))
             labels = []
+            all_values = []
 
             for idx, box in enumerate(boxes):
                 group_id = box['groupId']
@@ -1148,20 +1152,29 @@ def render_plots(plots: Dict[str, Any], metadata: Dict[str, Any], groups: List[D
                                 if feature.get('featureName', 'unknown') == feature_name:
                                     values = [p['value'] for p in feature.get('parameterHistoryArray', [])]
                                     if values:
-                                        bp = ax.boxplot([values], positions=[idx], widths=0.6, patch_artist=True)
+                                        value = values[0]
+                                        all_values.append(value)
                                         color = OUTLIER_COLOR if group.get('isOutlier') else NORMAL_COLOR
-                                        bp['boxes'][0].set_facecolor(color)
-                                        bp['boxes'][0].set_alpha(0.6)
+                                        ax.scatter(idx, value, c=color, s=80, zorder=3,
+                                                   edgecolor='white', linewidth=1)
                                     break
                         break
 
+            # Add mean reference line
+            if all_values:
+                ax.axhline(y=np.mean(all_values), color='gray', linestyle='--', alpha=0.5)
+
             ax.set_xticks(positions)
-            ax.set_xticklabels(labels, rotation=45)
+            ax.set_xticklabels(labels, rotation=45, ha='right')
             unit = units.get(feature_name, '')
             ylabel = f'Value ({unit})' if unit else 'Value'
             ax.set_ylabel(ylabel, fontsize=12)
             ax.set_title(f'{feature_name}', fontsize=14, fontweight='bold')
             ax.grid(True, alpha=0.3, axis='y')
+
+        # Hide empty subplot if odd number of features
+        if n_features % 2 == 1:
+            axes[-1, -1].set_visible(False)
 
         plt.tight_layout()
         filepath = save_dir / '02_box_plot.png'
@@ -1353,51 +1366,6 @@ def render_plots(plots: Dict[str, Any], metadata: Dict[str, Any], groups: List[D
             plt.savefig(filepath, dpi=150, bbox_inches='tight')
             plt.close()
             saved_files.append(filepath)
-
-    # 6. Summary
-    fig, ax = plt.subplots(figsize=(8, 6))
-    ax.axis('off')
-
-    outlier_groups = [g for g in groups if g.get('isOutlier', False)]
-    normal_groups = [g for g in groups if not g.get('isOutlier', False)]
-
-    summary_text = f"""
-ANOMALY DETECTION SUMMARY
-
-Data Type: {metadata.get('dataType', 'N/A')}
-Total Groups: {metadata.get('totalGroups', len(groups))}
-Anomalous: {len(outlier_groups)} ({len(outlier_groups)/len(groups)*100:.1f}%)
-Normal: {len(normal_groups)}
-
-Features Analyzed:
-  {', '.join(metadata.get('featuresAnalyzed', [])[:5])}
-
-OUTLIERS DETECTED:
-"""
-
-    if outlier_groups:
-        for og in outlier_groups:
-            gid = og['parameterAnomalyGroupId']
-            outlier_features = [f['featureName'] for f in og.get('featureArray', []) if f.get('isOutlier', False)]
-            summary_text += f"\n  {gid}"
-            if outlier_features:
-                summary_text += f": {', '.join(outlier_features[:3])}"
-    else:
-        summary_text += "\n  None detected"
-
-    if metadata.get('dateRange'):
-        dr = metadata['dateRange']
-        summary_text += f"\n\nDate Range:\n  {dr['start'][:10]} to {dr['end'][:10]}"
-
-    ax.text(0.05, 0.95, summary_text, fontsize=12, family='monospace',
-             verticalalignment='top', horizontalalignment='left',
-             bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5),
-             transform=ax.transAxes)
-    plt.tight_layout()
-    filepath = save_dir / '06_summary.png'
-    plt.savefig(filepath, dpi=150, bbox_inches='tight')
-    plt.close()
-    saved_files.append(filepath)
 
     _print(f"\n  Diagrams saved to: {save_dir}/")
     for f in saved_files:
