@@ -77,6 +77,15 @@ def print_summary(results: dict, dataset_name: str):
     print()
 
 
+def load_eval_config(config_name: str) -> dict:
+    """Load eval_config from a dataset config file."""
+    config_path = Path(__file__).parent / "config" / f"{config_name}.json"
+    if config_path.exists():
+        with open(config_path, 'r') as f:
+            return json.load(f).get('eval_config', None)
+    return None
+
+
 def analyze_traffic():
     """Run anomaly detection on traffic data."""
     print()
@@ -86,10 +95,11 @@ def analyze_traffic():
 
     # Set up diagram save path
     diagram_path = Path(__file__).parent / "diagrams" / "traffic" / "anomaly_analysis.png"
+    eval_config = load_eval_config("traffic")
 
     print()
     print("[2/4] Running anomaly detection...")
-    results = detect_anomalies(request_data, save_plots_path=str(diagram_path))
+    results = detect_anomalies(request_data, save_plots_path=str(diagram_path), eval_config=eval_config)
 
     print()
     print("[3/4] Saving results...")
@@ -113,10 +123,11 @@ def analyze_vehicles():
 
     # Set up diagram save path
     diagram_path = Path(__file__).parent / "diagrams" / "vehicles" / "anomaly_analysis.png"
+    eval_config = load_eval_config("vehicles")
 
     print()
     print("[2/4] Running anomaly detection...")
-    results = detect_anomalies(request_data, save_plots_path=str(diagram_path))
+    results = detect_anomalies(request_data, save_plots_path=str(diagram_path), eval_config=eval_config)
 
     print()
     print("[3/4] Saving results...")
@@ -140,10 +151,11 @@ def analyze_customers():
 
     # Set up diagram save path
     diagram_path = Path(__file__).parent / "diagrams" / "customers" / "anomaly_analysis.png"
+    eval_config = load_eval_config("customers")
 
     print()
     print("[2/4] Running anomaly detection...")
-    results = detect_anomalies(request_data, save_plots_path=str(diagram_path))
+    results = detect_anomalies(request_data, save_plots_path=str(diagram_path), eval_config=eval_config)
 
     print()
     print("[3/4] Saving results...")

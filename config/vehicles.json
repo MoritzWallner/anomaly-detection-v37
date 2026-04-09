@@ -3,5 +3,10 @@
   "constraints": {
     "voltage": { "min": 320, "max": 460 }
   },
-  "units": { "voltage": "V", "soc": "%" }
+  "units": { "voltage": "V", "soc": "%" },
+  "eval_config": {
+    "aggregation_window": "M",
+    "detection_method": "ensemble",
+    "contamination": "adaptive"
+  }
 }

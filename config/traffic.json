@@ -1,5 +1,10 @@
 {
   "dataset": "traffic",
   "constraints": {},
-  "units": { "vehicle_count": "vehicles/hour" }
+  "units": { "vehicle_count": "vehicles/hour" },
+  "eval_config": {
+    "aggregation_window": "M",
+    "detection_method": "ensemble",
+    "contamination": "adaptive"
+  }
 }

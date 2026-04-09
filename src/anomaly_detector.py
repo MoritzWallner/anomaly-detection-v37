@@ -2,7 +2,6 @@ import numpy as np
 import pandas as pd
 from sklearn.ensemble import IsolationForest
 from sklearn.preprocessing import StandardScaler
-from sklearn.inspection import permutation_importance
 from sklearn.decomposition import PCA
 from scipy import stats
 from typing import List, Dict, Any
@@ -16,10 +15,22 @@ warnings.filterwarnings('ignore')
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-import seaborn as sns
 
 # Enable output by default for local use (set SUPPRESS_OUTPUT=true to disable)
 SUPPRESS_OUTPUT = os.environ.get('SUPPRESS_OUTPUT', 'false') == 'true'
+
+DEFAULT_EVAL_CONFIG = {
+    'aggregation_window': 'M',
+    'detection_method': 'ensemble',
+    'contamination': 'adaptive',
+}
+
+def _resolve_config(config=None):
+    """Merge user config with defaults. Returns a new dict."""
+    resolved = dict(DEFAULT_EVAL_CONFIG)
+    if config:
+        resolved.update(config)
+    return resolved
 
 def _print(*args, **kwargs):
     """Conditional print that respects SUPPRESS_OUTPUT flag."""
@@ -38,17 +49,6 @@ def calculate_slope(y: np.ndarray) -> float:
     numerator = np.sum((x - x_mean) * (y - y_mean))
     denominator = np.sum((x - x_mean) ** 2)
     return numerator / denominator if denominator != 0 else 0.0
-
-
-def calculate_trend(y: np.ndarray) -> np.ndarray:
-    """Calculate linear trend line for y against x=[0,1,2,...,n-1]."""
-    n = len(y)
-    if n < 2:
-        return y.copy()
-    x = np.arange(n)
-    slope = calculate_slope(y)
-    intercept = np.mean(y) - slope * (n - 1) / 2
-    return slope * x + intercept
 
 
 def preprocess_enum_values(parameter_anomaly_group_array: List[Dict]) -> None:
@@ -106,7 +106,7 @@ def preprocess_enum_values(parameter_anomaly_group_array: List[Dict]) -> None:
                             # Keep type as 'enum' for output, but value is now int
 
 
-def detect_anomalies(request_data: Dict[str, Any], save_plots_path: str = None) -> Dict[str, Any]:
+def detect_anomalies(request_data: Dict[str, Any], save_plots_path: str = None, eval_config: Dict[str, Any] = None) -> Dict[str, Any]:
     """
     Detects outlier groups by analyzing features. Supports both time-series and cross-sectional data.
 
@@ -139,6 +139,8 @@ def detect_anomalies(request_data: Dict[str, Any], save_plots_path: str = None) 
         data_type = request_data.get('dataType', 'time-series')
         units = request_data.get('units', {})
 
+    config = _resolve_config(eval_config)
+
     _print("=" * 80)
     _print(f"ANOMALY DETECTION PIPELINE (dataType: {data_type})")
     _print("=" * 80)
@@ -158,14 +160,14 @@ def detect_anomalies(request_data: Dict[str, Any], save_plots_path: str = None) 
 
     # Route based on dataType
     if data_type == 'time-series':
-        feature_matrix, group_ids, feature_names = build_time_series_features(parameter_anomaly_group_array)
+        feature_matrix, group_ids, feature_names = build_time_series_features(parameter_anomaly_group_array, config=config)
     elif data_type == 'cross-sectional':
         feature_matrix, group_ids, feature_names = build_cross_sectional_features(parameter_anomaly_group_array)
     else:
         raise ValueError(f"Unknown dataType: {data_type}. Use 'time-series' or 'cross-sectional'")
 
-    if len(feature_matrix) < 2:
-        _print("WARNING: Need at least 2 groups for comparison")
+    if len(feature_matrix) < 3:
+        _print("WARNING: Need at least 3 groups for comparison")
         return {
             'groups': parameter_anomaly_group_array,
             'plots': {},
@@ -175,7 +177,7 @@ def detect_anomalies(request_data: Dict[str, Any], save_plots_path: str = None) 
     # Step 3: Detect group-level outliers (shared logic)
     _print("\n[4/5] Detecting group-level outliers...")
     group_outlier_flags, feature_importance_dict = detect_group_outliers(
-        feature_matrix, group_ids, parameter_anomaly_group_array, feature_names, data_type
+        feature_matrix, group_ids, parameter_anomaly_group_array, feature_names, data_type, config=config
     )
 
     # Step 4: Detect feature-level and point-level outliers
@@ -217,18 +219,19 @@ def detect_anomalies(request_data: Dict[str, Any], save_plots_path: str = None) 
     }
 
 
-def build_time_series_features(parameter_anomaly_group_array: List[Dict]) -> tuple:
+def build_time_series_features(parameter_anomaly_group_array: List[Dict], config: Dict = None) -> tuple:
     """
     Build feature matrix for time-series data.
-    Uses monthly aggregation to derive [slope, max_drop, avg_std] per feature.
+    Uses temporal aggregation to derive [slope, max_drop, avg_std] per feature.
 
     Returns:
         feature_matrix: np.array of shape (n_groups, n_features * 3)
         group_ids: List of group IDs
         feature_names: List of feature names (with _slope, _max_drop, _avg_std suffixes)
     """
+    agg_window = config.get('aggregation_window', 'M') if config else 'M'
     _print("\n[2/5] Calculating temporalFeatures (slope, max_drop, avg_std)...")
-    calculate_temporal_features(parameter_anomaly_group_array)
+    calculate_temporal_features(parameter_anomaly_group_array, aggregation_window=agg_window)
 
     _print("\n[3/5] Building feature matrix for group comparison...")
     feature_matrix, group_ids = build_feature_matrix(parameter_anomaly_group_array)
@@ -297,14 +300,17 @@ def build_cross_sectional_features(parameter_anomaly_group_array: List[Dict]) ->
     return feature_matrix, group_ids, feature_names
 
 
-def calculate_temporal_features(parameter_anomaly_group_array: List[Dict]) -> None:
+def calculate_temporal_features(parameter_anomaly_group_array: List[Dict], aggregation_window: str = 'M') -> None:
     """
     Calculate temporalFeatures [slope, max_drop, avg_std] for each feature in each group.
 
-    Uses monthly aggregation approach (like find_bad_cell_car.py) to detect long-term trends:
-    - Slope: Linear regression on monthly std/mean (degradation indicator)
-    - Max Drop: Largest consecutive decrease in monthly values
-    - Avg Std: Average of monthly standard deviations (volatility indicator)
+    Uses temporal aggregation to detect long-term trends:
+    - Slope: Linear regression on periodic std (degradation indicator)
+    - Max Drop: Largest consecutive decrease in periodic mean values
+    - Avg Std: Average of periodic standard deviations (volatility indicator)
+
+    Args:
+        aggregation_window: Pandas period alias — 'W' (weekly), 'M' (monthly), 'Q' (quarterly)
     """
 
     for group in parameter_anomaly_group_array:
@@ -321,18 +327,18 @@ def calculate_temporal_features(parameter_anomaly_group_array: List[Dict]) -> No
             # Sort by time
             param_history_sorted = sorted(param_history, key=lambda x: x['createdAt'])
 
-            # Convert to DataFrame for monthly aggregation
+            # Convert to DataFrame for periodic aggregation
             df = pd.DataFrame([
                 {
-                    'time': pd.to_datetime(p['createdAt']),
+                    'time': p.get('_parsed_dt') or pd.to_datetime(p['createdAt']),
                     'value': p['value']
                 }
                 for p in param_history_sorted
             ])
 
-            # Group by month and calculate statistics
-            df['month'] = df['time'].dt.to_period('M')
-            monthly_stats = df.groupby('month')['value'].agg(['mean', 'std', 'min', 'max', 'count']).reset_index()
+            # Group by period and calculate statistics
+            df['period'] = df['time'].dt.to_period(aggregation_window)
+            monthly_stats = df.groupby('period')['value'].agg(['mean', 'std', 'min', 'max', 'count']).reset_index()
 
             if len(monthly_stats) < 2:
                 # Not enough months for trend analysis, use raw data
@@ -401,7 +407,8 @@ def build_feature_matrix(parameter_anomaly_group_array: List[Dict]) -> tuple:
 def detect_group_outliers(feature_matrix: np.ndarray, group_ids: List[str],
                          parameter_anomaly_group_array: List[Dict],
                          feature_names: List[str],
-                         data_type: str = 'time-series') -> tuple:
+                         data_type: str = 'time-series',
+                         config: Dict = None) -> tuple:
     """
     Detect which groups are outliers using multi-method approach.
 
@@ -465,64 +472,75 @@ def detect_group_outliers(feature_matrix: np.ndarray, group_ids: List[str],
         _print(f"    {group_id}: anomaly_score={anomaly_scores[i]:.3f}")
 
     # Method 3: Isolation Forest
-    _print("\n  Method 3: Isolation Forest on All Features")
-
+    detection_method = config.get('detection_method', 'ensemble') if config else 'ensemble'
     feature_importance_dict = {}
+    iso_predictions = np.ones(n_groups)  # Default: no iForest flags
 
-    if n_groups >= 3:
-        # Normalize features
-        scaler = StandardScaler()
-        feature_matrix_scaled = scaler.fit_transform(feature_matrix)
+    if detection_method != 'zscore':
+        _print("\n  Method 3: Isolation Forest on All Features")
 
-        # Fit Isolation Forest
-        iso_forest = IsolationForest(
-            contamination=min(0.3, 1/n_groups),  # Expect at most 1 outlier or 30%
-            random_state=42,
-            n_estimators=100
-        )
+        if n_groups >= 3:
+            # Normalize features
+            scaler = StandardScaler()
+            feature_matrix_scaled = scaler.fit_transform(feature_matrix)
 
-        iso_predictions = iso_forest.fit_predict(feature_matrix_scaled)
-        iso_scores = iso_forest.score_samples(feature_matrix_scaled)
+            # Resolve contamination
+            contamination_setting = config.get('contamination', 'adaptive') if config else 'adaptive'
+            if contamination_setting == 'adaptive':
+                contamination_val = min(0.3, 1/n_groups)
+            else:
+                contamination_val = float(contamination_setting)
 
-        if_outliers = [group_ids[i] for i in range(n_groups) if iso_predictions[i] == -1]
-        _print(f"    Isolation Forest flagged: {if_outliers}")
+            # Fit Isolation Forest
+            iso_forest = IsolationForest(
+                contamination=contamination_val,
+                random_state=42,
+                n_estimators=100
+            )
 
-        # Calculate feature importance from tree structures
-        _print("\n  Method 3b: Calculating Feature Importance...")
+            iso_predictions = iso_forest.fit_predict(feature_matrix_scaled)
+            iso_scores = iso_forest.score_samples(feature_matrix_scaled)
 
-        try:
-            # Extract feature importance from Isolation Forest trees
-            importances = np.zeros(feature_matrix_scaled.shape[1])
+            if_outliers = [group_ids[i] for i in range(n_groups) if iso_predictions[i] == -1]
+            _print(f"    Isolation Forest flagged: {if_outliers}")
 
-            for tree in iso_forest.estimators_:
-                tree_structure = tree.tree_
-                tree_importances = tree_structure.compute_feature_importances(normalize=False)
-                importances += tree_importances
+            # Calculate feature importance from tree structures
+            _print("\n  Method 3b: Calculating Feature Importance...")
 
-            importances /= len(iso_forest.estimators_)
+            try:
+                # Extract feature importance from Isolation Forest trees
+                importances = np.zeros(feature_matrix_scaled.shape[1])
 
-            if importances.sum() > 0:
-                importances = importances / importances.sum()
+                for tree in iso_forest.estimators_:
+                    tree_structure = tree.tree_
+                    tree_importances = tree_structure.compute_feature_importances(normalize=False)
+                    importances += tree_importances
 
-            # Create importance dictionary using provided feature names
-            for i, fname in enumerate(feature_names):
-                if i < len(importances):
-                    feature_importance_dict[fname] = importances[i]
+                importances /= len(iso_forest.estimators_)
 
-            # Print top 5 most important features
-            sorted_features = sorted(feature_importance_dict.items(), key=lambda x: x[1], reverse=True)
-            _print(f"    Top features for outlier detection:")
-            for fname, importance in sorted_features[:min(5, len(sorted_features))]:
-                _print(f"      {fname}: {importance:.4f}")
+                if importances.sum() > 0:
+                    importances = importances / importances.sum()
 
-        except Exception as e:
-            _print(f"    Warning: Could not calculate feature importance: {e}")
+                # Create importance dictionary using provided feature names
+                for i, fname in enumerate(feature_names):
+                    if i < len(importances):
+                        feature_importance_dict[fname] = importances[i]
 
+                # Print top 5 most important features
+                sorted_features = sorted(feature_importance_dict.items(), key=lambda x: x[1], reverse=True)
+                _print(f"    Top features for outlier detection:")
+                for fname, importance in sorted_features[:min(5, len(sorted_features))]:
+                    _print(f"      {fname}: {importance:.4f}")
+
+            except Exception as e:
+                _print(f"    Warning: Could not calculate feature importance: {e}")
+
+        else:
+            _print(f"    Skipping Isolation Forest (need ≥3 groups, have {n_groups})")
     else:
-        _print(f"    Skipping Isolation Forest (need ≥3 groups, have {n_groups})")
-        iso_predictions = np.ones(n_groups)
+        _print("\n  Skipping Isolation Forest (detection_method='zscore')")
 
-    # Ranking by Anomaly Score (same as v2)
+    # Ranking by Anomaly Score
     _print("\n  Anomaly Score Ranking:")
     ranked_indices = np.argsort(anomaly_scores)[::-1]  # Highest anomaly score first
 
@@ -533,8 +551,7 @@ def detect_group_outliers(feature_matrix: np.ndarray, group_ids: List[str],
         marker = "OUTLIER" if rank == 0 else ""
         _print(f"      {rank+1}. {group_id}: {score:.3f} {marker}")
 
-    # Determine outliers: Top anomaly score OR flagged by Isolation Forest
-    # For time-series: additionally require POSITIVE degradation (increasing variability)
+    # Determine outliers based on detection_method
     outlier_flags = {}
 
     if data_type == 'time-series':
@@ -545,19 +562,33 @@ def detect_group_outliers(feature_matrix: np.ndarray, group_ids: List[str],
                 top_degrading_group = group_ids[idx]
                 break
 
-        for i, group_id in enumerate(group_ids):
-            is_if_outlier = (iso_predictions[i] == -1)
-            has_positive_degradation = degradation_scores[i] > 0
+    if detection_method == 'zscore':
+        # Z-Score only: top-ranked group (with degradation filter for time-series)
+        if data_type == 'time-series':
+            for i, group_id in enumerate(group_ids):
+                outlier_flags[group_id] = (group_id == top_degrading_group)
+        else:
+            for i, group_id in enumerate(group_ids):
+                outlier_flags[group_id] = (i == ranked_indices[0])
 
-            # Flag if: (top-ranked with positive degradation) OR (IF outlier with positive degradation)
-            is_top_degrading = (group_id == top_degrading_group)
-            outlier_flags[group_id] = has_positive_degradation and (is_top_degrading or is_if_outlier)
-    else:
-        # For cross-sectional data, use original v2 logic
+    elif detection_method == 'iforest':
+        # Isolation Forest only: flag groups where iso_predictions == -1
         for i, group_id in enumerate(group_ids):
-            is_top_anomaly = (i == ranked_indices[0])
-            is_if_outlier = (iso_predictions[i] == -1)
-            outlier_flags[group_id] = is_top_anomaly or is_if_outlier
+            outlier_flags[group_id] = (iso_predictions[i] == -1)
+
+    else:
+        # Ensemble (default): combined logic
+        if data_type == 'time-series':
+            for i, group_id in enumerate(group_ids):
+                is_if_outlier = (iso_predictions[i] == -1)
+                has_positive_degradation = degradation_scores[i] > 0
+                is_top_degrading = (group_id == top_degrading_group)
+                outlier_flags[group_id] = has_positive_degradation and (is_top_degrading or is_if_outlier)
+        else:
+            for i, group_id in enumerate(group_ids):
+                is_top_anomaly = (i == ranked_indices[0])
+                is_if_outlier = (iso_predictions[i] == -1)
+                outlier_flags[group_id] = is_top_anomaly or is_if_outlier
 
     # Store scores in groups for visualization
     for i, group in enumerate(parameter_anomaly_group_array):

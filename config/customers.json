@@ -6,5 +6,10 @@
     "monthly_logins": "count",
     "support_tickets": "count",
     "account_age_days": "days"
+  },
+  "eval_config": {
+    "aggregation_window": "M",
+    "detection_method": "ensemble",
+    "contamination": "adaptive"
   }
 }
